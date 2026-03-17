@@ -32,6 +32,7 @@ export interface PlayerState {
   swingFrame: number;
   pubkey: string;
   color: string;
+  characterId: string;
 }
 
 export interface GameState {
@@ -140,7 +141,7 @@ export function createGameState(gameId: string, seed: string): GameState {
   };
 }
 
-export function addPlayer(state: GameState, pubkey: string, playerIndex: number): GameState {
+export function addPlayer(state: GameState, pubkey: string, playerIndex: number, characterId = 'saylor'): GameState {
   if (state.players.has(pubkey)) return state;
 
   // Spread players across the top surface
@@ -155,6 +156,7 @@ export function addPlayer(state: GameState, pubkey: string, playerIndex: number)
     swingFrame: 0,
     pubkey,
     color: getPlayerColor(playerIndex),
+    characterId,
   };
 
   const newPlayers = new Map(state.players);
@@ -287,6 +289,8 @@ export interface PlayerStatePatch {
   isSwinging: boolean;
   /** Whether this player found the bitcoin (wins the game) */
   foundBitcoin: boolean;
+  /** Character avatar ID */
+  characterId?: string;
   /**
    * Every grid cell that differs from the original generated grid.
    * Only cells that have been hit or destroyed need to be listed.
@@ -325,6 +329,7 @@ export function applyStatePatch(
       swingFrame: 0,
       pubkey,
       color: getPlayerColor(playerIndex),
+      characterId: patch.characterId || 'saylor',
     };
   } else {
     player = {
@@ -333,6 +338,7 @@ export function applyStatePatch(
       y: patch.y,
       direction: patch.direction,
       isSwinging: patch.isSwinging,
+      characterId: patch.characterId || player.characterId,
     };
   }
 

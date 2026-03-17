@@ -6,9 +6,13 @@ import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { WaitingRoom } from '@/components/game/WaitingRoom';
 import { GamePlay } from '@/components/game/GamePlay';
 import { PaymentGate } from '@/components/game/PaymentGate';
+import { LightningAddressGate } from '@/components/game/LightningAddressGate';
 import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { LoginArea } from '@/components/auth/LoginArea';
+import { useLocalStorage } from '@/hooks/useLocalStorage';
+import { CHARACTERS } from '@/lib/gameConstants';
+import type { GameLobbyData } from '@/hooks/useGameLobby';
 
 export default function GamePage() {
   const { hostPubkey, gameId } = useParams<{ hostPubkey: string; gameId: string }>();
@@ -16,6 +20,7 @@ export default function GamePage() {
   const navigate = useNavigate();
   const [gameStarted, setGameStarted] = useState(false);
   const [hasPaid, setHasPaid] = useState(false);
+  const [selectedCharacter, setSelectedCharacter] = useLocalStorage('satminer-character', CHARACTERS[0].id);
 
   useSeoMeta({
     title: 'SatMiner — Game Room',
@@ -60,6 +65,52 @@ export default function GamePage() {
     );
   }
 
+  // Wrap all game screens in the LightningAddressGate so the player
+  // can't enter a game without having a payout address on their profile.
+  return (
+    <LightningAddressGate>
+      <GamePageInner
+        lobby={lobby}
+        isLoading={isLoading}
+        error={error}
+        gameStarted={gameStarted}
+        hasPaid={hasPaid}
+        selectedCharacter={selectedCharacter}
+        onSelectCharacter={setSelectedCharacter}
+        onGameStart={handleGameStart}
+        onPaymentComplete={handlePaymentComplete}
+        onBack={() => navigate('/')}
+      />
+    </LightningAddressGate>
+  );
+}
+
+/** Inner component rendered after lightning-address check passes. */
+function GamePageInner({
+  lobby,
+  isLoading,
+  error,
+  gameStarted,
+  hasPaid,
+  selectedCharacter,
+  onSelectCharacter,
+  onGameStart,
+  onPaymentComplete,
+  onBack,
+}: {
+  lobby: GameLobbyData | null | undefined;
+  isLoading: boolean;
+  error: Error | null;
+  gameStarted: boolean;
+  hasPaid: boolean;
+  selectedCharacter: string;
+  onSelectCharacter: (id: string) => void;
+  onGameStart: () => void;
+  onPaymentComplete: () => void;
+  onBack: () => void;
+}) {
+  const navigate = useNavigate();
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-stone-950 flex items-center justify-center">
@@ -86,35 +137,31 @@ export default function GamePage() {
 
   const isPlaying = gameStarted || lobby.status === 'playing';
 
-  // Stop polling the lobby once we're in gameplay — ACTION events are what matter now
-  // (The hook's refetchInterval is already disabled when gameStarted=true)
-
-  // If the game is already playing, go straight to gameplay
   if (isPlaying) {
     return (
       <div className="min-h-screen bg-stone-950 px-4 py-6">
-        <GamePlay lobby={lobby} />
+        <GamePlay lobby={lobby} characterId={selectedCharacter} />
       </div>
     );
   }
 
-  // Payment gate: player must pay before entering the waiting room
   if (!hasPaid) {
     return (
       <div className="min-h-screen bg-stone-950 px-4 py-8">
         <PaymentGate
           lobby={lobby}
-          onPaymentComplete={handlePaymentComplete}
-          onBack={() => navigate('/')}
+          selectedCharacter={selectedCharacter}
+          onSelectCharacter={onSelectCharacter}
+          onPaymentComplete={onPaymentComplete}
+          onBack={onBack}
         />
       </div>
     );
   }
 
-  // Paid: show waiting room
   return (
     <div className="min-h-screen bg-stone-950 px-4 py-6">
-      <WaitingRoom lobby={lobby} onGameStart={handleGameStart} />
+      <WaitingRoom lobby={lobby} onGameStart={onGameStart} />
     </div>
   );
 }

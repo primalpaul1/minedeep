@@ -30,6 +30,7 @@ import type { NostrEvent } from '@nostrify/nostrify';
 
 interface GamePlayProps {
   lobby: GameLobbyData;
+  characterId: string;
 }
 
 // Minimum ms between state broadcasts while the player is moving.
@@ -62,7 +63,7 @@ function buildMinedCells(
   return cells;
 }
 
-export function GamePlay({ lobby }: GamePlayProps) {
+export function GamePlay({ lobby, characterId }: GamePlayProps) {
   const { user } = useCurrentUser();
   const { publishState } = usePublishState();
   const { claimWin } = useClaimWin();
@@ -79,7 +80,9 @@ export function GamePlay({ lobby }: GamePlayProps) {
     const state = createGameState(lobby.gameId, lobby.seed);
     let s = state;
     lobby.players.forEach((pubkey, index) => {
-      s = addPlayer(s, pubkey, index);
+      // Pass our own characterId for our pubkey, default for others
+      const charId = (user && pubkey === user.pubkey) ? characterId : 'saylor';
+      s = addPlayer(s, pubkey, index, charId);
     });
     s = { ...s, started: true };
     return s;
@@ -131,6 +134,7 @@ export function GamePlay({ lobby }: GamePlayProps) {
       direction: player.direction,
       isSwinging: player.isSwinging,
       foundBitcoin,
+      characterId,
       minedCells: buildMinedCells(state.grid, originalGridRef.current),
     };
 

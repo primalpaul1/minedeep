@@ -1,6 +1,7 @@
 import { useRef, useEffect, useCallback } from 'react';
 import type { GameState, Cell, PlayerState } from '@/lib/gameEngine';
 import { GRID_WIDTH, GRID_HEIGHT, CELL_SIZE } from '@/lib/gameEngine';
+import { CHARACTERS } from '@/lib/gameConstants';
 
 interface GameCanvasProps {
   gameState: GameState;
@@ -180,6 +181,21 @@ function drawBitcoinSymbol(ctx: CanvasRenderingContext2D, cx: number, cy: number
   ctx.fillText('₿', cx, cy + 1);
 }
 
+// Pre-loaded character avatar images
+const characterImages: Record<string, HTMLImageElement> = {};
+let imagesLoaded = false;
+
+function preloadCharacterImages() {
+  if (imagesLoaded) return;
+  imagesLoaded = true;
+  for (const char of CHARACTERS) {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.src = char.image;
+    characterImages[char.id] = img;
+  }
+}
+
 function drawPlayer(ctx: CanvasRenderingContext2D, player: PlayerState, isCurrent: boolean, time: number) {
   const px = player.x * CELL_SIZE;
   const py = player.y * CELL_SIZE;
@@ -198,137 +214,90 @@ function drawPlayer(ctx: CanvasRenderingContext2D, player: PlayerState, isCurren
     ctx.fill();
   }
 
-  // Body
-  ctx.fillStyle = player.color;
-  // Head
-  ctx.beginPath();
-  ctx.arc(cx, cy - 8, 7, 0, Math.PI * 2);
-  ctx.fill();
+  // Character avatar image (circular, fitted into the cell)
+  const avatarImg = characterImages[player.characterId];
+  const avatarSize = CELL_SIZE - 4;
+  const avatarX = cx - avatarSize / 2;
+  const avatarY = cy - avatarSize / 2;
 
-  // Hard hat
-  ctx.fillStyle = '#fbbf24';
-  ctx.fillRect(cx - 8, cy - 16, 16, 4);
-  ctx.fillRect(cx - 6, cy - 19, 12, 4);
+  if (avatarImg && avatarImg.complete && avatarImg.naturalWidth > 0) {
+    ctx.save();
+    // Flip image if facing left
+    if (player.direction === 'left') {
+      ctx.translate(cx, cy);
+      ctx.scale(-1, 1);
+      ctx.translate(-cx, -cy);
+    }
 
-  // Body
-  ctx.fillStyle = player.color;
-  ctx.fillRect(cx - 5, cy - 1, 10, 12);
+    // Clip to circle
+    ctx.beginPath();
+    ctx.arc(cx, cy, avatarSize / 2, 0, Math.PI * 2);
+    ctx.closePath();
+    ctx.clip();
 
-  // Legs (simple)
-  ctx.fillRect(cx - 5, cy + 11, 4, 6);
-  ctx.fillRect(cx + 1, cy + 11, 4, 6);
+    ctx.drawImage(avatarImg, avatarX, avatarY, avatarSize, avatarSize);
+    ctx.restore();
 
-  // Boots
-  ctx.fillStyle = '#78350f';
-  ctx.fillRect(cx - 6, cy + 15, 5, 4);
-  ctx.fillRect(cx + 1, cy + 15, 5, 4);
+    // Border ring
+    ctx.strokeStyle = isCurrent ? '#fbbf24' : player.color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, avatarSize / 2, 0, Math.PI * 2);
+    ctx.stroke();
+  } else {
+    // Fallback: simple colored circle with initial
+    ctx.fillStyle = player.color;
+    ctx.beginPath();
+    ctx.arc(cx, cy, avatarSize / 2, 0, Math.PI * 2);
+    ctx.fill();
 
-  // Eyes
-  ctx.fillStyle = '#fff';
-  const eyeOffsetX = player.direction === 'left' ? -2 : player.direction === 'right' ? 2 : 0;
-  ctx.fillRect(cx - 3 + eyeOffsetX, cy - 10, 2, 2);
-  ctx.fillRect(cx + 1 + eyeOffsetX, cy - 10, 2, 2);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 14px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(player.characterId[0]?.toUpperCase() || '?', cx, cy);
+  }
 
-  // Axe
-  drawAxe(ctx, player, cx, cy, time);
+  // Swing effect: flash a pickaxe indicator
+  if (player.isSwinging) {
+    const swingProgress = Math.min(player.swingFrame / 6, 1);
+    const swingAngle = Math.sin(swingProgress * Math.PI) * 0.6;
+
+    ctx.save();
+    ctx.translate(cx + 14, cy - 14);
+    ctx.rotate(swingAngle);
+
+    // Pickaxe handle
+    ctx.fillStyle = '#92400e';
+    ctx.fillRect(-1, -6, 3, 12);
+    // Pickaxe head
+    ctx.fillStyle = '#9ca3af';
+    ctx.beginPath();
+    ctx.moveTo(-1, -6);
+    ctx.lineTo(7, -3);
+    ctx.lineTo(7, 0);
+    ctx.lineTo(-1, 0);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.restore();
+  }
 
   // Name label
   if (isCurrent) {
     ctx.fillStyle = 'rgba(0,0,0,0.7)';
-    ctx.fillRect(cx - 16, cy - 28, 32, 10);
-    ctx.fillStyle = '#fff';
-    ctx.font = '7px monospace';
+    const labelW = 32;
+    const labelH = 10;
+    ctx.fillRect(cx - labelW / 2, py - 2, labelW, labelH);
+    ctx.fillStyle = '#fbbf24';
+    ctx.font = 'bold 7px monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('YOU', cx, cy - 23);
+    ctx.fillText('YOU', cx, py + 3);
   }
 }
 
-function drawAxe(ctx: CanvasRenderingContext2D, player: PlayerState, cx: number, cy: number, time: number) {
-  ctx.save();
-  ctx.translate(cx, cy);
-
-  let angle = 0;
-  let axeX = 0;
-  let axeY = 0;
-
-  // Swing animation
-  if (player.isSwinging) {
-    const swingProgress = Math.min(player.swingFrame / 6, 1);
-    const swingAngle = Math.sin(swingProgress * Math.PI) * 1.2;
-
-    switch (player.direction) {
-      case 'right':
-        angle = -0.3 + swingAngle;
-        axeX = 10;
-        axeY = -4;
-        break;
-      case 'left':
-        angle = 0.3 - swingAngle;
-        axeX = -10;
-        axeY = -4;
-        break;
-      case 'down':
-        angle = swingAngle;
-        axeX = 8;
-        axeY = 4;
-        break;
-      case 'up':
-        angle = -swingAngle;
-        axeX = 8;
-        axeY = -10;
-        break;
-    }
-  } else {
-    // Idle bobbing
-    const bob = Math.sin(time * 2) * 0.1;
-    switch (player.direction) {
-      case 'right':
-        angle = -0.3 + bob;
-        axeX = 10;
-        axeY = -4;
-        break;
-      case 'left':
-        angle = 0.3 - bob;
-        axeX = -10;
-        axeY = -4;
-        break;
-      case 'down':
-        angle = bob;
-        axeX = 8;
-        axeY = 4;
-        break;
-      case 'up':
-        angle = -bob;
-        axeX = 8;
-        axeY = -10;
-        break;
-    }
-  }
-
-  ctx.translate(axeX, axeY);
-  ctx.rotate(angle);
-
-  // Handle
-  ctx.fillStyle = '#92400e';
-  ctx.fillRect(-1, -12, 3, 16);
-
-  // Axe head
-  ctx.fillStyle = '#9ca3af';
-  ctx.beginPath();
-  ctx.moveTo(-1, -12);
-  ctx.lineTo(8, -8);
-  ctx.lineTo(8, -4);
-  ctx.lineTo(-1, -4);
-  ctx.closePath();
-  ctx.fill();
-
-  // Shine
-  ctx.fillStyle = '#d1d5db';
-  ctx.fillRect(2, -10, 3, 2);
-
-  ctx.restore();
-}
+// Axe rendering is now inlined into drawPlayer's swing effect
 
 // Particle system for mining effects
 interface Particle {
@@ -387,6 +356,11 @@ function updateAndDrawParticles(ctx: CanvasRenderingContext2D) {
 export function GameCanvas({ gameState, currentPubkey, className }: GameCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationRef = useRef<number>(0);
+
+  // Preload character images once on mount
+  useEffect(() => {
+    preloadCharacterImages();
+  }, []);
 
   const draw = useCallback((time: number) => {
     const canvas = canvasRef.current;

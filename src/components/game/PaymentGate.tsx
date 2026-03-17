@@ -26,14 +26,17 @@ import QRCode from 'qrcode';
 import type { GameLobbyData } from '@/hooks/useGameLobby';
 import type { WebLNProvider } from '@webbtc/webln-types';
 import { useNostr } from '@nostrify/react';
+import { CharacterPicker } from './CharacterPicker';
 
 interface PaymentGateProps {
   lobby: GameLobbyData;
+  selectedCharacter: string;
+  onSelectCharacter: (id: string) => void;
   onPaymentComplete: () => void;
   onBack: () => void;
 }
 
-export function PaymentGate({ lobby, onPaymentComplete, onBack }: PaymentGateProps) {
+export function PaymentGate({ lobby, selectedCharacter, onSelectCharacter, onPaymentComplete, onBack }: PaymentGateProps) {
   const { user } = useCurrentUser();
   const houseAuthor = useAuthor(HOUSE_PUBKEY_HEX);
   const { config } = useAppContext();
@@ -363,6 +366,14 @@ export function PaymentGate({ lobby, onPaymentComplete, onBack }: PaymentGatePro
               No wallet connected. You can still pay by scanning a QR code or copying the invoice.
             </div>
           )}
+        </div>
+
+        {/* Character picker */}
+        <div className="bg-stone-900/50 border border-stone-700/30 rounded-xl p-4">
+          <CharacterPicker
+            selected={selectedCharacter}
+            onSelect={onSelectCharacter}
+          />
         </div>
 
         <Button
