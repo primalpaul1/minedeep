@@ -12,7 +12,7 @@
 
 import { nip19, getPublicKey } from 'nostr-tools';
 import { NSecSigner } from '@nostrify/nostrify';
-import { LN } from '@getalby/sdk';
+import { webln as weblnSdk } from '@getalby/sdk';
 
 const HOUSE_NSEC = 'nsec12uf5hr3c0mrzcjtxpy56hmt2rzkpsalx3sjnhmh70rjvagltdamq5wzwy6';
 
@@ -42,26 +42,35 @@ export function getHouseSigner(): NSecSigner {
   return new NSecSigner(HOUSE_SECRET_KEY);
 }
 
-/** Create an LN client for the house wallet to pay invoices */
-export function getHouseWallet(): LN {
-  return new LN(HOUSE_NWC);
-}
-
-/** Pay a Lightning invoice from the house wallet */
+/** Pay a Lightning invoice from the house wallet via NWC directly.
+ *  Uses NWCWebLNProvider instead of the LN convenience class so that
+ *  we bypass any browser-wallet (WebLN) lookup — the house wallet is
+ *  always NWC-only and never needs window.webln.
+ */
 export async function payInvoiceFromHouse(invoice: string): Promise<{ preimage: string }> {
-  const wallet = getHouseWallet();
+  const provider = new weblnSdk.NWCWebLNProvider({ nostrWalletConnectUrl: HOUSE_NWC });
+
+  try {
+    await provider.enable();
+  } catch (err) {
+    throw new Error(`House NWC connection failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   // Race against a 30-second timeout
   const timeoutPromise = new Promise<never>((_, reject) => {
     setTimeout(() => reject(new Error('House payment timed out after 30 seconds')), 30000);
   });
 
-  const result = await Promise.race([
-    wallet.pay(invoice),
-    timeoutPromise,
-  ]) as { preimage: string };
+  try {
+    const result = await Promise.race([
+      provider.sendPayment(invoice),
+      timeoutPromise,
+    ]) as { preimage: string };
 
-  return result;
+    return result;
+  } finally {
+    provider.close?.();
+  }
 }
 
 /** Time limit: if no one joins within this period, entry fees are refunded */
