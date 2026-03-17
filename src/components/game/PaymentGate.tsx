@@ -9,6 +9,7 @@ import { useWallet } from '@/hooks/useWallet';
 import { useNWC } from '@/hooks/useNWCContext';
 import { useToast } from '@/hooks/useToast';
 import { WalletModal } from '@/components/WalletModal';
+import { HOUSE_PUBKEY_HEX } from '@/lib/houseAccount';
 import {
   Zap,
   Loader2,
@@ -18,6 +19,7 @@ import {
   Wallet,
   CheckCircle2,
   ArrowLeft,
+  ShieldCheck,
 } from 'lucide-react';
 import { nip57 } from 'nostr-tools';
 import QRCode from 'qrcode';
@@ -34,7 +36,7 @@ interface PaymentGateProps {
 
 export function PaymentGate({ lobby, onPaymentComplete, onBack }: PaymentGateProps) {
   const { user } = useCurrentUser();
-  const hostAuthor = useAuthor(lobby.hostPubkey);
+  const houseAuthor = useAuthor(HOUSE_PUBKEY_HEX);
   const { config } = useAppContext();
   const { webln } = useWallet();
   const { sendPayment, getActiveConnection } = useNWC();
@@ -50,7 +52,7 @@ export function PaymentGate({ lobby, onPaymentComplete, onBack }: PaymentGatePro
 
   const amount = lobby.betAmount;
 
-  // Check if current user already has a zap receipt for this lobby event
+  // Check if current user already has a zap receipt on the lobby event
   const checkExistingPayment = useCallback(async () => {
     if (!user) return;
 
@@ -65,14 +67,12 @@ export function PaymentGate({ lobby, onPaymentComplete, onBack }: PaymentGatePro
         { signal: AbortSignal.timeout(5000) },
       );
 
-      // Check if any zap receipt contains this user's pubkey in the description
       for (const receipt of zapReceipts) {
         const descriptionTag = receipt.tags.find(([name]) => name === 'description')?.[1];
         if (descriptionTag) {
           try {
             const zapRequest = JSON.parse(descriptionTag);
             if (zapRequest.pubkey === user.pubkey) {
-              // Verify the amount
               const amountTag = zapRequest.tags?.find(([name]: string[]) => name === 'amount')?.[1];
               if (amountTag) {
                 const paidMillisats = parseInt(amountTag);
@@ -139,11 +139,12 @@ export function PaymentGate({ lobby, onPaymentComplete, onBack }: PaymentGatePro
 
     setIsGenerating(true);
     try {
-      const authorData = hostAuthor.data;
+      // Use the HOUSE ACCOUNT for receiving payments
+      const authorData = houseAuthor.data;
       if (!authorData?.metadata || !authorData.event) {
         toast({
-          title: 'Host profile not found',
-          description: 'Could not load the game host\'s Lightning address.',
+          title: 'House account not found',
+          description: 'Could not load the game\'s escrow account. Try again in a moment.',
           variant: 'destructive',
         });
         setIsGenerating(false);
@@ -153,8 +154,8 @@ export function PaymentGate({ lobby, onPaymentComplete, onBack }: PaymentGatePro
       const { lud06, lud16 } = authorData.metadata;
       if (!lud06 && !lud16) {
         toast({
-          title: 'No Lightning address',
-          description: 'The game host does not have a Lightning address configured on their Nostr profile.',
+          title: 'Payment unavailable',
+          description: 'The house account does not have a Lightning address configured.',
           variant: 'destructive',
         });
         setIsGenerating(false);
@@ -165,7 +166,7 @@ export function PaymentGate({ lobby, onPaymentComplete, onBack }: PaymentGatePro
       if (!zapEndpoint) {
         toast({
           title: 'Zap endpoint not found',
-          description: 'Could not find a zap endpoint for the game host.',
+          description: 'Could not find a payment endpoint for the house account.',
           variant: 'destructive',
         });
         setIsGenerating(false);
@@ -174,12 +175,13 @@ export function PaymentGate({ lobby, onPaymentComplete, onBack }: PaymentGatePro
 
       const zapAmount = amount * 1000; // millisats
 
+      // Zap the HOUSE ACCOUNT, but reference the lobby event for tracking
       const zapRequest = nip57.makeZapRequest({
-        profile: lobby.hostPubkey,
+        profile: HOUSE_PUBKEY_HEX,
         event: lobby.event,
         amount: zapAmount,
         relays: config.relayMetadata.relays.map(r => r.url),
-        comment: `SatMiner game entry: ${lobby.gameId}`,
+        comment: `SatMiner entry: ${lobby.gameId}`,
       });
 
       const signedZapRequest = await user.signer.signEvent(zapRequest);
@@ -227,7 +229,6 @@ export function PaymentGate({ lobby, onPaymentComplete, onBack }: PaymentGatePro
             description: `${amount} sats paid via NWC. Confirming...`,
           });
           setIsPaying(false);
-          // Payment will be detected by the polling check
           return;
         } catch (nwcError) {
           console.error('NWC auto-pay failed:', nwcError);
@@ -255,7 +256,7 @@ export function PaymentGate({ lobby, onPaymentComplete, onBack }: PaymentGatePro
         }
       }
 
-      // No auto-pay available — user must pay manually via QR / copy
+      // No auto-pay available
       setIsPaying(false);
     } catch {
       setIsPaying(false);
@@ -326,6 +327,14 @@ export function PaymentGate({ lobby, onPaymentComplete, onBack }: PaymentGatePro
           </p>
         </div>
 
+        {/* Escrow info */}
+        <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-xl p-3 flex items-start gap-2.5">
+          <ShieldCheck className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />
+          <p className="text-[11px] text-emerald-400/80 font-mono">
+            Funds are held in escrow by the SatMiner house account. The winner receives the full pot automatically. If no one joins within 1 hour, you get a refund.
+          </p>
+        </div>
+
         {/* Wallet connection status */}
         <div className="bg-stone-900/50 border border-stone-700/30 rounded-xl p-4 space-y-3">
           <div className="flex items-center justify-between">
@@ -376,8 +385,8 @@ export function PaymentGate({ lobby, onPaymentComplete, onBack }: PaymentGatePro
         </Button>
 
         <p className="text-[10px] text-stone-600 font-mono text-center">
-          Payment is sent as a Lightning zap to the game host&apos;s wallet.
-          The winner receives the pot directly.
+          Entry fee is held in escrow. Winner receives the pot. 
+          Refunds issued if the game doesn&apos;t start within 1 hour.
         </p>
       </div>
     );

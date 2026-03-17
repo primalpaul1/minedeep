@@ -1,11 +1,13 @@
-import { useEffect } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { PlayerList } from './PlayerList';
 import { usePaidPlayers } from './PaymentGate';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { useUpdateGameStatus, useGameActions } from '@/hooks/useGameLobby';
+import { useHousePayout } from '@/hooks/useHousePayout';
 import type { GameLobbyData } from '@/hooks/useGameLobby';
-import { Zap, Play, Users, Loader2, Copy, ArrowLeft, ShieldCheck, AlertTriangle } from 'lucide-react';
+import { REFUND_TIMEOUT_MS } from '@/lib/houseAccount';
+import { Zap, Play, Users, Loader2, Copy, ArrowLeft, ShieldCheck, AlertTriangle, Clock, RotateCcw } from 'lucide-react';
 import { useToast } from '@/hooks/useToast';
 import { useNavigate } from 'react-router-dom';
 
@@ -22,9 +24,53 @@ export function WaitingRoom({ lobby, onGameStart }: WaitingRoomProps) {
   const navigate = useNavigate();
   const { paidPlayers, totalPaid } = usePaidPlayers(lobby);
 
+  const { refundPlayers, isPaying: isRefunding } = useHousePayout();
+
   const isHost = user?.pubkey === lobby.hostPubkey;
   const allPaid = lobby.players.length > 0 && lobby.players.every(p => paidPlayers.has(p));
   const paidCount = lobby.players.filter(p => paidPlayers.has(p)).length;
+
+  // Calculate time remaining until refund
+  const gameCreatedAt = lobby.event.created_at * 1000; // convert to ms
+  const refundDeadline = gameCreatedAt + REFUND_TIMEOUT_MS;
+  const [now, setNow] = useState(Date.now());
+  const [isExpired, setIsExpired] = useState(false);
+  const [refundTriggered, setRefundTriggered] = useState(false);
+
+  // Update timer every second
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const currentTime = Date.now();
+      setNow(currentTime);
+      if (currentTime >= refundDeadline) {
+        setIsExpired(true);
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [refundDeadline]);
+
+  const timeRemaining = useMemo(() => {
+    const diff = Math.max(0, refundDeadline - now);
+    const minutes = Math.floor(diff / 60000);
+    const seconds = Math.floor((diff % 60000) / 1000);
+    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  }, [refundDeadline, now]);
+
+  // Auto-trigger refund when expired (host only, only players with 1 player)
+  useEffect(() => {
+    if (isExpired && isHost && lobby.players.length <= 1 && paidCount > 0 && !refundTriggered) {
+      setRefundTriggered(true);
+      const paidList = lobby.players.filter(p => paidPlayers.has(p));
+      refundPlayers(lobby, paidList).catch(console.error);
+    }
+  }, [isExpired, isHost, lobby, paidCount, paidPlayers, refundTriggered, refundPlayers]);
+
+  const handleManualRefund = async () => {
+    if (!isExpired) return;
+    setRefundTriggered(true);
+    const paidList = lobby.players.filter(p => paidPlayers.has(p));
+    await refundPlayers(lobby, paidList);
+  };
 
   // Check for new players from join actions
   useEffect(() => {
@@ -173,12 +219,45 @@ export function WaitingRoom({ lobby, onGameStart }: WaitingRoomProps) {
         </div>
       </div>
 
-      {/* Waiting animation */}
-      <div className="flex items-center justify-center gap-2 py-4">
-        <Loader2 className="w-5 h-5 text-amber-400/60 animate-spin" />
-        <span className="text-sm text-stone-400 font-mono animate-pulse">
-          {allPaid ? 'Ready to start!' : 'Waiting for players to join & pay...'}
-        </span>
+      {/* Timer & waiting animation */}
+      <div className="space-y-2">
+        {isExpired && lobby.players.length <= 1 ? (
+          <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 text-center space-y-3">
+            <div className="flex items-center justify-center gap-2 text-red-400">
+              <Clock className="w-4 h-4" />
+              <span className="text-sm font-mono font-bold">Game Expired</span>
+            </div>
+            <p className="text-xs text-red-400/70 font-mono">
+              No one joined within 1 hour. Entry fees will be refunded.
+            </p>
+            {paidCount > 0 && !refundTriggered && (
+              <Button
+                onClick={handleManualRefund}
+                disabled={isRefunding}
+                className="bg-red-500/20 border border-red-500/40 text-red-300 hover:bg-red-500/30 font-mono text-sm"
+              >
+                <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
+                {isRefunding ? 'Refunding...' : 'Trigger Refund'}
+              </Button>
+            )}
+            {refundTriggered && (
+              <p className="text-xs text-emerald-400 font-mono">Refund initiated ✓</p>
+            )}
+          </div>
+        ) : (
+          <div className="flex items-center justify-center gap-4 py-4">
+            <div className="flex items-center gap-2">
+              <Loader2 className="w-5 h-5 text-amber-400/60 animate-spin" />
+              <span className="text-sm text-stone-400 font-mono animate-pulse">
+                {allPaid ? 'Ready to start!' : 'Waiting for players to join & pay...'}
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5 text-stone-600">
+              <Clock className="w-3 h-3" />
+              <span className="text-xs font-mono">{timeRemaining}</span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Share link */}
@@ -217,15 +296,19 @@ export function WaitingRoom({ lobby, onGameStart }: WaitingRoomProps) {
           </li>
           <li className="flex items-start gap-2">
             <span className="text-amber-400/60">2.</span>
-            Game starts when all players have paid
+            Funds are held in escrow by the house account
           </li>
           <li className="flex items-start gap-2">
             <span className="text-amber-400/60">3.</span>
-            Use arrows to move, spacebar to mine rocks
+            Game starts when all players have paid
           </li>
           <li className="flex items-start gap-2">
             <span className="text-amber-400/60">4.</span>
-            First miner to find the hidden Bitcoin wins the whole pot!
+            First miner to find the hidden Bitcoin wins the pot!
+          </li>
+          <li className="flex items-start gap-2">
+            <span className="text-amber-400/60">5.</span>
+            If no one joins within 1 hour, entry fees are refunded
           </li>
         </ul>
       </div>

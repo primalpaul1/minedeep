@@ -12,10 +12,11 @@ import {
 } from '@/lib/gameEngine';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { usePublishAction, useClaimWin, useUpdateGameStatus } from '@/hooks/useGameLobby';
+import { useHousePayout } from '@/hooks/useHousePayout';
 import type { GameLobbyData } from '@/hooks/useGameLobby';
 import { useNostr } from '@nostrify/react';
 import { GAME_KINDS } from '@/lib/gameConstants';
-import { Trophy, Zap, ArrowLeft } from 'lucide-react';
+import { Trophy, Zap, ArrowLeft, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useNavigate } from 'react-router-dom';
 import type { NostrEvent } from '@nostrify/nostrify';
@@ -29,6 +30,7 @@ export function GamePlay({ lobby }: GamePlayProps) {
   const { publishAction } = usePublishAction();
   const { claimWin } = useClaimWin();
   const { updateStatus } = useUpdateGameStatus();
+  const { payWinner, isPaying: isPayingOut, payoutComplete } = useHousePayout();
   const { nostr } = useNostr();
   const navigate = useNavigate();
 
@@ -140,14 +142,16 @@ export function GamePlay({ lobby }: GamePlayProps) {
     return () => clearInterval(interval);
   }, []);
 
-  // Claim win when bitcoin is found
+  // Claim win when bitcoin is found — also trigger house payout
   useEffect(() => {
     if (gameState.winner && gameState.winner === user?.pubkey && !winClaimedRef.current) {
       winClaimedRef.current = true;
       claimWin(lobby.gameId, lobby.hostPubkey).catch(console.error);
       updateStatus(lobby, 'finished').catch(console.error);
+      // Trigger house payout to the winner
+      payWinner(user.pubkey, lobby).catch(console.error);
     }
-  }, [gameState.winner, user?.pubkey, lobby, claimWin, updateStatus]);
+  }, [gameState.winner, user?.pubkey, lobby, claimWin, updateStatus, payWinner]);
 
   const handleMove = useCallback((direction: 'up' | 'down' | 'left' | 'right') => {
     if (!user || gameState.winner) return;
@@ -279,6 +283,16 @@ export function GamePlay({ lobby }: GamePlayProps) {
                     <p className="text-lg text-amber-300/80 font-mono">
                       You won <span className="text-amber-400 font-bold">{totalPot} sats!</span>
                     </p>
+                    {isPayingOut ? (
+                      <div className="flex items-center justify-center gap-2 text-amber-300/60">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span className="text-xs font-mono">Sending payout to your wallet...</span>
+                      </div>
+                    ) : payoutComplete ? (
+                      <p className="text-xs text-emerald-400 font-mono">
+                        ⚡ Payout submitted to your Lightning address!
+                      </p>
+                    ) : null}
                   </>
                 ) : isLoser ? (
                   <>

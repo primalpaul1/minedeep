@@ -9,11 +9,9 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Zap, Loader2, AlertCircle } from 'lucide-react';
+import { Zap, Loader2, ShieldCheck } from 'lucide-react';
 import { MIN_BET_SATS } from '@/lib/gameConstants';
 import { useCreateGame } from '@/hooks/useGameLobby';
-import { useCurrentUser } from '@/hooks/useCurrentUser';
-import { useAuthor } from '@/hooks/useAuthor';
 import { useToast } from '@/hooks/useToast';
 
 interface CreateGameDialogProps {
@@ -26,29 +24,15 @@ export function CreateGameDialog({ open, onOpenChange, onGameCreated }: CreateGa
   const [betAmount, setBetAmount] = useState(MIN_BET_SATS);
   const [isCreating, setIsCreating] = useState(false);
   const { createGame } = useCreateGame();
-  const { user } = useCurrentUser();
-  const hostAuthor = useAuthor(user?.pubkey);
   const { toast } = useToast();
 
   const presets = [10, 21, 50, 100, 500, 1000];
-
-  // Check if the host has a lightning address configured
-  const hasLightningAddress = !!(hostAuthor.data?.metadata?.lud06 || hostAuthor.data?.metadata?.lud16);
 
   const handleCreate = async () => {
     if (betAmount < MIN_BET_SATS) {
       toast({
         title: 'Invalid bet',
         description: `Minimum bet is ${MIN_BET_SATS} sats`,
-        variant: 'destructive',
-      });
-      return;
-    }
-
-    if (!hasLightningAddress) {
-      toast({
-        title: 'Lightning address required',
-        description: 'You need a Lightning address on your Nostr profile to host a game. Players will zap their entry fees to your wallet.',
         variant: 'destructive',
       });
       return;
@@ -113,35 +97,29 @@ export function CreateGameDialog({ open, onOpenChange, onGameCreated }: CreateGa
             </div>
           </div>
 
-          {/* Lightning address warning */}
-          {!hasLightningAddress && user && (
-            <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
-              <div>
-                <p className="text-xs text-red-400 font-mono font-bold">Lightning address required</p>
-                <p className="text-[10px] text-red-400/70 font-mono mt-1">
-                  As the host, players will zap their entry fees to your Lightning address. 
-                  Add a Lightning address (lud16) to your Nostr profile first.
-                </p>
-              </div>
+          {/* Escrow info */}
+          <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-3 flex items-start gap-2.5">
+            <ShieldCheck className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <p className="text-xs text-emerald-400/90 font-mono font-bold">Funds held in escrow</p>
+              <p className="text-[10px] text-emerald-400/60 font-mono">
+                All entry fees are held by the SatMiner house account. The winner is paid out automatically. If no one joins within 1 hour, everyone gets refunded.
+              </p>
             </div>
-          )}
+          </div>
 
-          <div className="bg-stone-800/50 border border-stone-700/50 rounded-lg p-3 space-y-2">
+          <div className="bg-stone-800/50 border border-stone-700/50 rounded-lg p-3">
             <p className="text-xs text-stone-400 font-mono">
-              ⚡ <span className="text-amber-400/80">How it works:</span> Each player pays{' '}
-              <span className="text-amber-400">{betAmount} sats</span> via Lightning before the game starts. 
-              The game host can start when all players have paid. The winner who finds the hidden Bitcoin first wins the entire pot!
-            </p>
-            <p className="text-[10px] text-stone-500 font-mono">
-              💡 As the host, entry fees are zapped to your Lightning wallet. You&apos;ll also pay your own entry fee.
+              ⚡ Each player pays{' '}
+              <span className="text-amber-400">{betAmount} sats</span> to enter.
+              First miner to find the hidden Bitcoin wins the entire pot!
             </p>
           </div>
 
           <Button
             onClick={handleCreate}
-            disabled={isCreating || !hasLightningAddress}
-            className="w-full bg-amber-600 hover:bg-amber-500 text-black font-mono font-bold text-base py-5 disabled:opacity-50"
+            disabled={isCreating}
+            className="w-full bg-amber-600 hover:bg-amber-500 text-black font-mono font-bold text-base py-5"
           >
             {isCreating ? (
               <>

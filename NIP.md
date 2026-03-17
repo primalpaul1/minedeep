@@ -1,5 +1,11 @@
 # SatMiner - Custom Nostr Event Kinds
 
+## House Account (Escrow)
+
+SatMiner uses a dedicated house account that acts as an escrow for all game funds. All entry fees are zapped to the house account's Lightning address. When a winner is determined, the house pays out the full pot to the winner. If no one joins within 1 hour, entry fees are refunded to all paid players.
+
+The house account's nsec is embedded in the client. The payout is triggered by the winning player's browser, which signs a zap request from the house account to the winner's Lightning address.
+
 ## Kind 35303 — Game Lobby (Addressable)
 
 Represents a SatMiner game room. Created by the host when they create a new game. Updated as players join and the game status changes.
@@ -36,11 +42,12 @@ Represents a SatMiner game room. Created by the host when they create a new game
 }
 ```
 
-### Payment Verification
+### Payment Flow
 
-Entry fees are paid via NIP-57 zaps to the game host's lobby event (kind 35303). Payment verification is done by querying for kind 9735 zap receipts targeting the lobby event's `a` tag coordinate (`35303:<host-pubkey>:<game-id>`). Each player's payment is verified by checking the zap request's `pubkey` field in the receipt's `description` tag against the player list, and confirming the `amount` tag meets the minimum entry fee.
-
-The game host must have a Lightning address (`lud16` or `lud06`) configured in their kind 0 profile metadata to receive entry fee payments.
+1. **Entry fees** are paid via NIP-57 zaps to the **house account** (not the game host). The zap request references the lobby event for tracking.
+2. **Payment verification** is done by querying kind 9735 zap receipts targeting the lobby event's `a` tag coordinate (`35303:<host-pubkey>:<game-id>`). Each player's payment is verified by checking the zap request's `pubkey` field.
+3. **Payouts** are triggered when the winner is determined. The house account signs a zap request to the winner's Lightning address.
+4. **Refunds** are triggered if no players join within 1 hour of game creation. The house account signs zap requests back to each paid player's Lightning address.
 
 ## Kind 1159 — Game Action (Regular)
 
