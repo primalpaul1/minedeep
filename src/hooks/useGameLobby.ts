@@ -204,23 +204,23 @@ export function useGameActions(gameId: string) {
   });
 }
 
-export function usePublishAction() {
+export function usePublishState() {
   const { mutateAsync: createEvent } = useNostrPublish();
 
-  const publishAction = async (gameId: string, action: { type: string; direction?: string }) => {
+  const publishState = async (gameId: string, patch: import('@/lib/gameEngine').PlayerStatePatch) => {
     await createEvent({
       kind: GAME_KINDS.ACTION,
-      content: JSON.stringify(action),
+      content: JSON.stringify(patch),
       tags: [
         ['d', gameId],
         ['t', 'satminer'],
-        ['alt', `SatMiner game action: ${action.type}`],
+        ['alt', 'SatMiner player state update'],
       ],
       created_at: Math.floor(Date.now() / 1000),
     });
   };
 
-  return { publishAction };
+  return { publishState };
 }
 
 export function useClaimWin() {

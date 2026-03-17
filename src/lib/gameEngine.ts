@@ -273,6 +273,110 @@ export function swingAxe(state: GameState, pubkey: string): SwingResult {
   };
 }
 
+/**
+ * A compact snapshot of one player's state, broadcast over the network.
+ * Instead of sending "I moved left", we send "I am at (5,8) facing left,
+ * and these cells are now empty/damaged on my grid."
+ */
+export interface PlayerStatePatch {
+  type: 'state';
+  /** Player position */
+  x: number;
+  y: number;
+  direction: 'left' | 'right' | 'up' | 'down';
+  isSwinging: boolean;
+  /** Whether this player found the bitcoin (wins the game) */
+  foundBitcoin: boolean;
+  /**
+   * Every grid cell that differs from the original generated grid.
+   * Only cells that have been hit or destroyed need to be listed.
+   * health=0 means the cell is empty.
+   */
+  minedCells: Array<{ x: number; y: number; health: number; type: CellType }>;
+}
+
+/**
+ * Merge a remote player's state snapshot into our local game state.
+ *
+ * Rules:
+ * - Player position is set directly (authoritative from their browser).
+ * - Grid cells merge using "most destroyed wins":
+ *     if the incoming health is lower than ours, we accept it.
+ *     if the incoming type is 'empty', we always accept it.
+ * - If foundBitcoin is true, we set the winner.
+ */
+export function applyStatePatch(
+  state: GameState,
+  pubkey: string,
+  patch: PlayerStatePatch,
+  playerIndex: number,
+): GameState {
+  if (state.winner) return state; // game already over, no more updates
+
+  // --- Update player position ---
+  let player = state.players.get(pubkey);
+  if (!player) {
+    // Player not yet in local state — initialise them
+    player = {
+      x: patch.x,
+      y: patch.y,
+      direction: patch.direction,
+      isSwinging: patch.isSwinging,
+      swingFrame: 0,
+      pubkey,
+      color: getPlayerColor(playerIndex),
+    };
+  } else {
+    player = {
+      ...player,
+      x: patch.x,
+      y: patch.y,
+      direction: patch.direction,
+      isSwinging: patch.isSwinging,
+    };
+  }
+
+  const newPlayers = new Map(state.players);
+  newPlayers.set(pubkey, player);
+
+  // --- Merge mined cells into local grid ---
+  // Only copy the grid if there are actually cells to merge
+  let newGrid = state.grid;
+  let gridChanged = false;
+
+  for (const cell of patch.minedCells) {
+    const { x, y, health, type } = cell;
+    // Bounds check
+    if (x < 0 || x >= GRID_WIDTH || y < 0 || y >= GRID_HEIGHT) continue;
+
+    const local = newGrid[y][x];
+
+    // Accept if: incoming is more destroyed (lower health) OR incoming is empty
+    const shouldApply =
+      type === 'empty' ||
+      health < local.health ||
+      (local.type !== 'empty' && local.type !== 'bedrock' && local.type !== 'surface' && type === 'empty');
+
+    if (shouldApply && (local.health !== health || local.type !== type)) {
+      if (!gridChanged) {
+        // Shallow-copy the grid rows lazily (only copy what we need)
+        newGrid = state.grid.map(row => row.slice());
+        gridChanged = true;
+      }
+      newGrid[y][x] = { ...local, health, type, revealed: health <= 0 };
+    }
+  }
+
+  const newState: GameState = {
+    ...state,
+    grid: newGrid,
+    players: newPlayers,
+    winner: patch.foundBitcoin ? pubkey : state.winner,
+  };
+
+  return newState;
+}
+
 /** Apply gravity to a player - they fall if there's empty space below */
 export function applyGravity(state: GameState, pubkey: string): GameState {
   const player = state.players.get(pubkey);

@@ -4,19 +4,25 @@ import { GameControls } from './GameControls';
 import { PlayerList } from './PlayerList';
 import {
   createGameState,
+  createGrid,
   addPlayer,
   movePlayer,
   swingAxe,
   applyGravity,
+  applyStatePatch,
   type GameState,
+  type PlayerStatePatch,
+  type CellType,
+  GRID_WIDTH,
+  GRID_HEIGHT,
 } from '@/lib/gameEngine';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
-import { usePublishAction, useClaimWin, useUpdateGameStatus } from '@/hooks/useGameLobby';
+import { usePublishState, useClaimWin, useUpdateGameStatus } from '@/hooks/useGameLobby';
 import { useHousePayout } from '@/hooks/useHousePayout';
 import { useGamePlayers } from '@/hooks/useGamePlayers';
 import type { GameLobbyData } from '@/hooks/useGameLobby';
 import { useNostr } from '@nostrify/react';
-import { GAME_KINDS } from '@/lib/gameConstants';
+import { GAME_KINDS, STATE_BROADCAST_INTERVAL } from '@/lib/gameConstants';
 import { Trophy, Zap, ArrowLeft, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useNavigate } from 'react-router-dom';
@@ -26,17 +32,39 @@ interface GamePlayProps {
   lobby: GameLobbyData;
 }
 
-// How often we attempt to publish a player's action (ms).
-// Lowered to 150ms — fast enough for responsiveness but gentle on relay rate limits.
-const ACTION_THROTTLE = 150;
+// Minimum ms between state broadcasts while the player is moving.
+// We broadcast on every action, but cap it so a held key doesn't spam the relay.
+const BROADCAST_THROTTLE = 150;
 
-// How many of my own recent action event-IDs to keep in the dedup set.
-// Older ones are pruned to avoid unbounded memory growth.
+// Max event-IDs to keep in the dedup set before pruning.
 const MAX_PROCESSED_IDS = 500;
+
+/**
+ * Build the compact minedCells list for a state broadcast.
+ * We compare the current grid against the original generated grid and emit
+ * only the cells that have changed (been hit or destroyed).
+ */
+function buildMinedCells(
+  currentGrid: GameState['grid'],
+  originalGrid: GameState['grid'],
+): PlayerStatePatch['minedCells'] {
+  const cells: PlayerStatePatch['minedCells'] = [];
+  for (let y = 0; y < GRID_HEIGHT; y++) {
+    for (let x = 0; x < GRID_WIDTH; x++) {
+      const orig = originalGrid[y][x];
+      const cur = currentGrid[y][x];
+      // Only include cells that differ from the original generated state
+      if (cur.health !== orig.health || cur.type !== orig.type) {
+        cells.push({ x, y, health: cur.health, type: cur.type as CellType });
+      }
+    }
+  }
+  return cells;
+}
 
 export function GamePlay({ lobby }: GamePlayProps) {
   const { user } = useCurrentUser();
-  const { publishAction } = usePublishAction();
+  const { publishState } = usePublishState();
   const { claimWin } = useClaimWin();
   const { updateStatus } = useUpdateGameStatus();
   const { payWinner, isPaying: isPayingOut, payoutComplete } = useHousePayout();
@@ -44,10 +72,12 @@ export function GamePlay({ lobby }: GamePlayProps) {
   const { nostr } = useNostr();
   const navigate = useNavigate();
 
+  // The original grid is deterministic from the seed — we use it to compute diffs.
+  const originalGridRef = useRef<GameState['grid']>(createGrid(lobby.seed).grid);
+
   const [gameState, setGameState] = useState<GameState>(() => {
     const state = createGameState(lobby.gameId, lobby.seed);
     let s = state;
-    // Use lobby.players for initial state (from the lobby event p-tags)
     lobby.players.forEach((pubkey, index) => {
       s = addPlayer(s, pubkey, index);
     });
@@ -55,7 +85,7 @@ export function GamePlay({ lobby }: GamePlayProps) {
     return s;
   });
 
-  // When allPlayers updates (from zap receipts), add any missing players to the game
+  // When allPlayers updates (from zap receipts), add any missing players
   useEffect(() => {
     setGameState(prev => {
       let state = prev;
@@ -72,27 +102,63 @@ export function GamePlay({ lobby }: GamePlayProps) {
 
   const gameStateRef = useRef(gameState);
   gameStateRef.current = gameState;
+
   const winClaimedRef = useRef(false);
-  const payoutFiredRef = useRef(false); // prevent double-payout across winner + host
-  const lastActionTimeRef = useRef(0);
-  const processedActionsRef = useRef(new Set<string>());
+  const payoutFiredRef = useRef(false);
+  const lastBroadcastTimeRef = useRef(0);
+  const processedIdsRef = useRef(new Set<string>());
 
-  // Track the timestamp of the newest action we've seen so far.
-  // Polling uses this as a `since` filter so we only fetch genuinely new events,
-  // avoiding re-scanning the full history on every tick.
+  // Watermark: only fetch events newer than what we've already seen
   const lastSeenTimestampRef = useRef(Math.floor(Date.now() / 1000));
-
-  // Whether a relay query is currently in-flight.
-  // Prevents overlapping polls when the relay is slow.
+  // In-flight guard: never start a new poll while one is still running
   const isPollingRef = useRef(false);
 
-  // Poll for remote player actions
+  // --- Broadcast helpers ---
+
+  /**
+   * Build and publish a state snapshot of the local player.
+   * Called after every local action AND periodically as a heartbeat.
+   */
+  const broadcastState = useCallback((state: GameState, foundBitcoin: boolean) => {
+    if (!user) return;
+    const player = state.players.get(user.pubkey);
+    if (!player) return;
+
+    const patch: PlayerStatePatch = {
+      type: 'state',
+      x: player.x,
+      y: player.y,
+      direction: player.direction,
+      isSwinging: player.isSwinging,
+      foundBitcoin,
+      minedCells: buildMinedCells(state.grid, originalGridRef.current),
+    };
+
+    publishState(lobby.gameId, patch).catch(() => {
+      // Retry once after a short delay on transient relay failure
+      setTimeout(() => publishState(lobby.gameId, patch).catch(console.error), 600);
+    });
+  }, [user, lobby.gameId, publishState]);
+
+  // Periodic heartbeat broadcast so remote players stay in sync even if
+  // individual publishes are dropped. Fires every STATE_BROADCAST_INTERVAL ms.
+  useEffect(() => {
+    if (!user || gameState.winner) return;
+
+    const interval = setInterval(() => {
+      broadcastState(gameStateRef.current, false);
+    }, STATE_BROADCAST_INTERVAL);
+
+    return () => clearInterval(interval);
+  }, [user, gameState.winner, broadcastState]);
+
+  // --- Remote state polling ---
+
   useEffect(() => {
     if (!user || gameState.winner) return;
 
     const poll = async () => {
-      // Skip if a previous query hasn't finished yet (prevents thundering herd)
-      if (isPollingRef.current) return;
+      if (isPollingRef.current) return; // don't overlap
       isPollingRef.current = true;
 
       try {
@@ -102,15 +168,13 @@ export function GamePlay({ lobby }: GamePlayProps) {
           [{
             kinds: [GAME_KINDS.ACTION],
             '#d': [lobby.gameId],
-            // Only fetch events newer than what we've already processed.
-            // Use a 5-second lookback buffer to handle minor clock skew between relays.
-            since: Math.max(0, since - 5),
+            since: Math.max(0, since - 5), // 5s clock-skew buffer
             limit: 100,
           }],
           { signal: AbortSignal.timeout(4000) },
         );
 
-        // Advance the watermark to the newest event we received
+        // Advance the timestamp watermark
         if (events.length > 0) {
           const newestTs = Math.max(...events.map((e: NostrEvent) => e.created_at));
           if (newestTs > lastSeenTimestampRef.current) {
@@ -118,81 +182,73 @@ export function GamePlay({ lobby }: GamePlayProps) {
           }
         }
 
-        // Process new actions from OTHER players
+        // Apply remote state patches
         events.forEach((event: NostrEvent) => {
+          // Skip our own events
           if (event.pubkey === user.pubkey) return;
-          if (processedActionsRef.current.has(event.id)) return;
-          processedActionsRef.current.add(event.id);
+          // Skip already-processed events
+          if (processedIdsRef.current.has(event.id)) return;
+          processedIdsRef.current.add(event.id);
 
-          // Prune the dedup set to avoid unbounded memory growth
-          if (processedActionsRef.current.size > MAX_PROCESSED_IDS) {
-            const iter = processedActionsRef.current.values();
+          // Prune the dedup set
+          if (processedIdsRef.current.size > MAX_PROCESSED_IDS) {
+            const iter = processedIdsRef.current.values();
             for (let i = 0; i < 100; i++) {
               const val = iter.next().value;
-              if (val !== undefined) processedActionsRef.current.delete(val);
+              if (val !== undefined) processedIdsRef.current.delete(val);
             }
           }
 
           try {
-            const action = JSON.parse(event.content);
+            const patch = JSON.parse(event.content) as PlayerStatePatch;
+            if (patch.type !== 'state') return; // ignore any legacy action events
+
+            const senderPubkey = event.pubkey;
+            const playerIndex = lobby.players.indexOf(senderPubkey);
+            if (playerIndex < 0) return; // unknown player, skip
+
             setGameState(prev => {
-              let state = prev;
+              const next = applyStatePatch(prev, senderPubkey, patch, playerIndex);
 
-              // Ensure remote player exists
-              if (!state.players.has(event.pubkey)) {
-                const idx = lobby.players.indexOf(event.pubkey);
-                if (idx >= 0) {
-                  state = addPlayer(state, event.pubkey, idx);
-                } else {
-                  return state;
+              // Trigger mining particles if cells were destroyed
+              if (patch.minedCells.length > 0) {
+                for (const cell of patch.minedCells) {
+                  if (cell.type === 'empty') {
+                    // Check if this cell was not already empty in our local grid
+                    if (prev.grid[cell.y]?.[cell.x]?.type !== 'empty') {
+                      const isBitcoin = cell.x === prev.bitcoinX && cell.y === prev.bitcoinY;
+                      addMiningParticles(cell.x, cell.y, true, isBitcoin);
+                    }
+                  }
                 }
               }
 
-              if (action.type === 'move' && action.direction) {
-                state = movePlayer(state, event.pubkey, action.direction);
-                // Only apply gravity for horizontal moves (same logic as local player)
-                if (action.direction === 'left' || action.direction === 'right') {
-                  state = applyGravity(state, event.pubkey);
-                }
-              } else if (action.type === 'swing') {
-                const result = swingAxe(state, event.pubkey);
-                state = result.state;
-                if (result.hitCell && result.destroyed) {
-                  addMiningParticles(result.hitCell.x, result.hitCell.y, true, result.foundBitcoin);
-                } else if (result.hitCell) {
-                  addMiningParticles(result.hitCell.x, result.hitCell.y, false, false);
-                }
-              }
-
-              return state;
+              return next;
             });
           } catch {
-            // Invalid action, skip
+            // Malformed event, skip
           }
         });
       } catch {
-        // Query failed (timeout, network error etc.) — just try again next tick
+        // Query failed — try again next tick
       } finally {
         isPollingRef.current = false;
       }
     };
 
-    // Poll every 800ms, but the guard above ensures we never have two in-flight at once
     const interval = setInterval(poll, 800);
-    // Kick off an immediate first poll so we don't wait 800ms on entry
-    poll();
+    poll(); // immediate first poll
 
     return () => clearInterval(interval);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nostr, lobby.gameId, user, lobby.players, gameState.winner]);
 
-  // Update swing animation
+  // --- Swing animation ticker ---
   useEffect(() => {
     const interval = setInterval(() => {
       setGameState(prev => {
         let changed = false;
         const newPlayers = new Map(prev.players);
-
         prev.players.forEach((player, key) => {
           if (player.isSwinging) {
             changed = true;
@@ -203,16 +259,16 @@ export function GamePlay({ lobby }: GamePlayProps) {
             }
           }
         });
-
         if (!changed) return prev;
         return { ...prev, players: newPlayers };
       });
     }, 50);
-
     return () => clearInterval(interval);
   }, []);
 
-  // Claim win when bitcoin is found — also trigger house payout from winner's browser
+  // --- Win handling ---
+
+  // Winner's browser: claim win + pay
   useEffect(() => {
     if (gameState.winner && gameState.winner === user?.pubkey && !winClaimedRef.current) {
       winClaimedRef.current = true;
@@ -223,130 +279,96 @@ export function GamePlay({ lobby }: GamePlayProps) {
     }
   }, [gameState.winner, user?.pubkey, lobby, claimWin, updateStatus, payWinner]);
 
-  // Host-side payout fallback: watch for a RESULT event from the winner.
-  // If the winner's browser crashed or disconnected before payWinner() ran,
-  // the host picks it up here and pays on their behalf.
+  // Host fallback: watch for a RESULT event if the winner's browser drops
   const isHost = user?.pubkey === lobby.hostPubkey;
   useEffect(() => {
-    if (!isHost || gameState.winner) return; // only run while game is still active
+    if (!isHost || gameState.winner) return;
 
     const interval = setInterval(async () => {
       try {
         const results = await nostr.query(
-          [{
-            kinds: [GAME_KINDS.RESULT],
-            '#d': [lobby.gameId],
-            limit: 5,
-          }],
+          [{ kinds: [GAME_KINDS.RESULT], '#d': [lobby.gameId], limit: 5 }],
           { signal: AbortSignal.timeout(4000) },
         );
-
         for (const event of results) {
-          // A RESULT event means this player claims to have won
-          const winnerPubkey = event.pubkey;
-          if (winnerPubkey && !payoutFiredRef.current) {
+          if (!payoutFiredRef.current) {
             payoutFiredRef.current = true;
-            // Update local state so the overlay shows
-            setGameState(prev => ({ ...prev, winner: winnerPubkey }));
+            setGameState(prev => ({ ...prev, winner: event.pubkey }));
             updateStatus(lobby, 'finished').catch(console.error);
-            // Pay the winner
-            payWinner(winnerPubkey, lobby).catch(console.error);
+            payWinner(event.pubkey, lobby).catch(console.error);
           }
         }
       } catch {
-        // Query failed, try again next tick
+        // ignore
       }
     }, 2000);
 
     return () => clearInterval(interval);
   }, [isHost, gameState.winner, nostr, lobby, updateStatus, payWinner]);
 
+  // --- Local input handlers ---
+
   const handleMove = useCallback((direction: 'up' | 'down' | 'left' | 'right') => {
     if (!user || gameStateRef.current.winner) return;
 
     const now = Date.now();
-    if (now - lastActionTimeRef.current < ACTION_THROTTLE) return;
-    lastActionTimeRef.current = now;
+    if (now - lastBroadcastTimeRef.current < BROADCAST_THROTTLE) return;
+    lastBroadcastTimeRef.current = now;
 
+    let newState: GameState;
     setGameState(prev => {
       let state = movePlayer(prev, user.pubkey, direction);
-      // Only apply gravity for horizontal movement (walking off a ledge),
-      // not for intentional up/down moves.
       if (direction === 'left' || direction === 'right') {
         state = applyGravity(state, user.pubkey);
       }
+      newState = state;
       return state;
     });
 
-    // Publish with retry — a single relay timeout shouldn't drop the move
-    publishAction(lobby.gameId, { type: 'move', direction }).catch(() => {
-      // Retry once after a short delay
-      setTimeout(() => {
-        publishAction(lobby.gameId, { type: 'move', direction }).catch(console.error);
-      }, 500);
-    });
-  }, [user, lobby.gameId, publishAction]);
+    // Broadcast after the next microtask so newState is assigned
+    setTimeout(() => broadcastState(newState ?? gameStateRef.current, false), 0);
+  }, [user, broadcastState]);
 
   const handleSwing = useCallback(() => {
     if (!user || gameStateRef.current.winner) return;
 
     const now = Date.now();
-    if (now - lastActionTimeRef.current < ACTION_THROTTLE) return;
-    lastActionTimeRef.current = now;
+    if (now - lastBroadcastTimeRef.current < BROADCAST_THROTTLE) return;
+    lastBroadcastTimeRef.current = now;
+
+    let foundBitcoin = false;
+    let newState: GameState;
 
     setGameState(prev => {
       const result = swingAxe(prev, user.pubkey);
       if (result.hitCell) {
         addMiningParticles(result.hitCell.x, result.hitCell.y, result.destroyed, result.foundBitcoin);
       }
+      foundBitcoin = result.foundBitcoin;
+      newState = result.state;
       return result.state;
     });
 
-    // Publish with retry
-    publishAction(lobby.gameId, { type: 'swing' }).catch(() => {
-      setTimeout(() => {
-        publishAction(lobby.gameId, { type: 'swing' }).catch(console.error);
-      }, 500);
-    });
-  }, [user, lobby.gameId, publishAction]);
+    setTimeout(() => broadcastState(newState ?? gameStateRef.current, foundBitcoin), 0);
+  }, [user, broadcastState]);
 
-  // Keyboard controls
+  // --- Keyboard controls ---
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.repeat) return;
-
       switch (e.key) {
-        case 'ArrowUp':
-        case 'w':
-        case 'W':
-          e.preventDefault();
-          handleMove('up');
-          break;
-        case 'ArrowDown':
-        case 's':
-        case 'S':
-          e.preventDefault();
-          handleMove('down');
-          break;
-        case 'ArrowLeft':
-        case 'a':
-        case 'A':
-          e.preventDefault();
-          handleMove('left');
-          break;
-        case 'ArrowRight':
-        case 'd':
-        case 'D':
-          e.preventDefault();
-          handleMove('right');
-          break;
+        case 'ArrowUp': case 'w': case 'W':
+          e.preventDefault(); handleMove('up'); break;
+        case 'ArrowDown': case 's': case 'S':
+          e.preventDefault(); handleMove('down'); break;
+        case 'ArrowLeft': case 'a': case 'A':
+          e.preventDefault(); handleMove('left'); break;
+        case 'ArrowRight': case 'd': case 'D':
+          e.preventDefault(); handleMove('right'); break;
         case ' ':
-          e.preventDefault();
-          handleSwing();
-          break;
+          e.preventDefault(); handleSwing(); break;
       }
     };
-
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleMove, handleSwing]);
@@ -376,7 +398,6 @@ export function GamePlay({ lobby }: GamePlayProps) {
               <Zap className="w-4 h-4 fill-current" />
               <span className="text-sm font-mono font-bold">{totalPot} sats</span>
             </div>
-
             <div className="text-xs font-mono text-stone-500">
               {gameState.winner ? 'GAME OVER' : 'MINING...'}
             </div>
@@ -385,10 +406,7 @@ export function GamePlay({ lobby }: GamePlayProps) {
 
         {/* Canvas */}
         <div className="relative rounded-xl overflow-hidden border-2 border-stone-700/50 shadow-2xl shadow-black/50">
-          <GameCanvas
-            gameState={gameState}
-            currentPubkey={user?.pubkey}
-          />
+          <GameCanvas gameState={gameState} currentPubkey={user?.pubkey} />
 
           {/* Winner overlay */}
           {gameState.winner && (
@@ -435,7 +453,6 @@ export function GamePlay({ lobby }: GamePlayProps) {
                     </h2>
                   </>
                 )}
-
                 <Button
                   onClick={() => navigate('/')}
                   className="bg-amber-600 hover:bg-amber-500 text-black font-mono font-bold mt-4"
@@ -449,11 +466,7 @@ export function GamePlay({ lobby }: GamePlayProps) {
 
         {/* Mobile controls */}
         <div className="lg:hidden">
-          <GameControls
-            onMove={handleMove}
-            onSwing={handleSwing}
-            disabled={!!gameState.winner}
-          />
+          <GameControls onMove={handleMove} onSwing={handleSwing} disabled={!!gameState.winner} />
         </div>
       </div>
 
@@ -466,16 +479,10 @@ export function GamePlay({ lobby }: GamePlayProps) {
           winner={gameState.winner}
         />
 
-        {/* Desktop controls info */}
         <div className="hidden lg:block">
-          <GameControls
-            onMove={handleMove}
-            onSwing={handleSwing}
-            disabled={!!gameState.winner}
-          />
+          <GameControls onMove={handleMove} onSwing={handleSwing} disabled={!!gameState.winner} />
         </div>
 
-        {/* Game info */}
         <div className="bg-stone-900/50 border border-stone-700/30 rounded-lg p-3 space-y-2">
           <h3 className="text-xs font-mono text-stone-500 uppercase tracking-wider">
             How to Play

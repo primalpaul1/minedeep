@@ -20,4 +20,16 @@ export const ACTION_TYPES = {
   SWING: 'swing',
   JOIN: 'join',
   READY: 'ready',
+  /**
+   * Full player state snapshot (position + mined cells).
+   * Replaces per-move events for remote player synchronisation.
+   * Published on the same kind (ACTION) with the same #d filter.
+   */
+  STATE: 'state',
 } as const;
+
+/**
+ * How often (ms) each client broadcasts its full state to the relay.
+ * Even if individual publishes drop, the next broadcast re-syncs everyone.
+ */
+export const STATE_BROADCAST_INTERVAL = 500;
