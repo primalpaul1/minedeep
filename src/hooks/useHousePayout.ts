@@ -1,20 +1,19 @@
 import { useState, useCallback } from 'react';
 import { useNostr } from '@nostrify/react';
-import { useAuthor } from './useAuthor';
 import { useAppContext } from './useAppContext';
 import { useToast } from './useToast';
-import { getHouseSigner, HOUSE_PUBKEY_HEX } from '@/lib/houseAccount';
+import { getHouseSigner, HOUSE_PUBKEY_HEX, payInvoiceFromHouse } from '@/lib/houseAccount';
 import { nip57 } from 'nostr-tools';
 import type { GameLobbyData } from './useGameLobby';
 
 /**
- * Hook to handle house account payouts.
+ * Hook to handle house account payouts via NWC.
  * 
- * When a winner is found, the house sends the pot to the winner's 
- * Lightning address via a NIP-57 zap. The zap request is signed 
- * by the house signer (nsec embedded in the client).
- * 
- * If no one joins within 1 hour, refunds are triggered similarly.
+ * Flow for payouts:
+ * 1. Sign a NIP-57 zap request from the house account → winner's profile
+ * 2. Fetch an invoice from the winner's LNURL endpoint
+ * 3. Pay the invoice from the house wallet via NWC
+ * 4. Publish a verifiable payout record on Nostr
  */
 export function useHousePayout() {
   const { nostr } = useNostr();
@@ -25,9 +24,6 @@ export function useHousePayout() {
 
   /**
    * Pay the winner the total pot.
-   * The house signs a zap request targeting the winner's profile,
-   * fetches the invoice from their LNURL endpoint, and we display
-   * a confirmation that the payout has been initiated.
    */
   const payWinner = useCallback(async (
     winnerPubkey: string,
@@ -94,34 +90,33 @@ export function useHousePayout() {
         throw new Error('Winner\'s Lightning service did not return a valid invoice.');
       }
 
-      // Now we need to pay this invoice from the house wallet.
-      // The house account's NWC or connected wallet pays it.
-      // Since the house nsec has a Lightning address attached, 
-      // we use the Alby SDK (LN class) with the house account.
-      // For now, we publish a payout event that the house can process.
-      
-      // Publish a payout record on Nostr so it's verifiable
+      // PAY the invoice from the house wallet via NWC
+      console.log(`[House] Paying ${totalPot} sats to winner...`);
+      const payResult = await payInvoiceFromHouse(payoutInvoice);
+      console.log(`[House] Payment successful! Preimage: ${payResult.preimage}`);
+
+      // Publish a verifiable payout record on Nostr
       const payoutEvent = {
-        kind: 9735 as const, // We record this as information
+        kind: 9735 as const,
         content: '',
         tags: [
           ['p', winnerPubkey],
           ['bolt11', payoutInvoice],
+          ['preimage', payResult.preimage],
           ['amount', zapAmount.toString()],
           ['description', JSON.stringify(signedZapRequest)],
         ],
         created_at: Math.floor(Date.now() / 1000),
       };
 
-      // Sign and publish the payout record
       const signedPayout = await houseSigner.signEvent(payoutEvent);
       await nostr.event(signedPayout, { signal: AbortSignal.timeout(5000) });
 
       setPayoutComplete(true);
 
       toast({
-        title: 'Payout initiated! ⚡',
-        description: `${totalPot} sats payout to the winner has been submitted.`,
+        title: 'Payout sent! ⚡',
+        description: `${totalPot} sats have been sent to the winner's Lightning wallet.`,
       });
 
       return payoutInvoice;
@@ -139,8 +134,7 @@ export function useHousePayout() {
   }, [nostr, config, toast]);
 
   /**
-   * Refund all players who paid. Called when the game expires 
-   * (no one joined within 1 hour).
+   * Refund all players who paid. Called when the game expires.
    */
   const refundPlayers = useCallback(async (
     lobby: GameLobbyData,
@@ -210,6 +204,11 @@ export function useHousePayout() {
           continue;
         }
 
+        // PAY the refund invoice from the house wallet via NWC
+        console.log(`[House] Refunding ${lobby.betAmount} sats to ${pubkey.slice(0, 8)}...`);
+        const payResult = await payInvoiceFromHouse(refundInvoice);
+        console.log(`[House] Refund successful! Preimage: ${payResult.preimage}`);
+
         // Publish refund record
         const refundEvent = {
           kind: 9735 as const,
@@ -217,6 +216,7 @@ export function useHousePayout() {
           tags: [
             ['p', pubkey],
             ['bolt11', refundInvoice],
+            ['preimage', payResult.preimage],
             ['amount', refundAmount.toString()],
             ['description', JSON.stringify(signedZapRequest)],
           ],
@@ -234,8 +234,9 @@ export function useHousePayout() {
 
     const successCount = results.filter(r => r.success).length;
     toast({
-      title: 'Refunds processed',
-      description: `${successCount}/${paidPubkeys.length} refunds initiated.`,
+      title: successCount > 0 ? 'Refunds sent! ⚡' : 'Refund issues',
+      description: `${successCount}/${paidPubkeys.length} refunds paid successfully.`,
+      variant: successCount > 0 ? undefined : 'destructive',
     });
 
     setIsPaying(false);

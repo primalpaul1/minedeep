@@ -3,18 +3,20 @@
  * 
  * This is the escrow-style account that holds all entry fees.
  * - Players zap their entry fees to this account's Lightning address.
- * - When a winner is determined, the house pays out the pot to the winner.
- * - If no one joins within 1 hour, entry fees are refunded.
+ * - When a winner is determined, the house pays out the pot to the winner via NWC.
+ * - If no one joins within 1 hour, entry fees are refunded via NWC.
  * 
- * The nsec is embedded in the client. In a production environment, 
- * payout logic would live on a server. For this game, the winning 
- * player's browser triggers the payout using the house signer.
+ * The nsec is used to sign zap requests (Nostr identity).
+ * The NWC connection string is used to actually pay Lightning invoices.
  */
 
 import { nip19, getPublicKey } from 'nostr-tools';
 import { NSecSigner } from '@nostrify/nostrify';
+import { LN } from '@getalby/sdk';
 
 const HOUSE_NSEC = 'nsec12uf5hr3c0mrzcjtxpy56hmt2rzkpsalx3sjnhmh70rjvagltdamq5wzwy6';
+
+const HOUSE_NWC = 'nostr+walletconnect://abeae6cfe41e808f4bcf09709a66f781d9ed72973e7c726192f5cb02086a67cd?relay=wss://relay.primal.net&secret=bb3220762bc1b9f6e1834e55577ddd2008342efd7279fbf857bb71048b71214d&lud16=quietwalrus11@primal.net';
 
 /** Decode the house secret key and derive the public key */
 function getHouseKeys() {
@@ -38,6 +40,28 @@ export const HOUSE_NPUB = nip19.npubEncode(HOUSE_PUBKEY);
 /** Create a signer for the house account (for signing zap requests / payouts) */
 export function getHouseSigner(): NSecSigner {
   return new NSecSigner(HOUSE_SECRET_KEY);
+}
+
+/** Create an LN client for the house wallet to pay invoices */
+export function getHouseWallet(): LN {
+  return new LN(HOUSE_NWC);
+}
+
+/** Pay a Lightning invoice from the house wallet */
+export async function payInvoiceFromHouse(invoice: string): Promise<{ preimage: string }> {
+  const wallet = getHouseWallet();
+
+  // Race against a 30-second timeout
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error('House payment timed out after 30 seconds')), 30000);
+  });
+
+  const result = await Promise.race([
+    wallet.pay(invoice),
+    timeoutPromise,
+  ]) as { preimage: string };
+
+  return result;
 }
 
 /** Time limit: if no one joins within this period, entry fees are refunded */
