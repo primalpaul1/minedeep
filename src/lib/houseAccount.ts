@@ -53,30 +53,58 @@ export function getHouseSigner(): NSecSigner {
  *  we bypass any browser-wallet (WebLN) lookup — the house wallet is
  *  always NWC-only and never needs window.webln.
  */
-export async function payInvoiceFromHouse(invoice: string): Promise<{ preimage: string }> {
+/** Cached provider so we don't reconnect on every payment */
+let cachedProvider: InstanceType<typeof weblnSdk.NostrWebLNProvider> | null = null;
+
+async function getHouseProvider(): Promise<InstanceType<typeof weblnSdk.NostrWebLNProvider>> {
+  if (cachedProvider) return cachedProvider;
+
   const provider = new weblnSdk.NostrWebLNProvider({ nostrWalletConnectUrl: HOUSE_NWC });
+  await provider.enable();
+  cachedProvider = provider;
+  return provider;
+}
 
-  try {
-    await provider.enable();
-  } catch (err) {
-    throw new Error(`House NWC connection failed: ${err instanceof Error ? err.message : String(err)}`);
+export async function payInvoiceFromHouse(invoice: string): Promise<{ preimage: string }> {
+  const MAX_ATTEMPTS = 2;
+  const TIMEOUT_MS = 60000; // 60 seconds
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    let provider: InstanceType<typeof weblnSdk.NostrWebLNProvider>;
+    try {
+      provider = await getHouseProvider();
+    } catch (err) {
+      // Connection failed — reset cache and retry
+      cachedProvider = null;
+      if (attempt === MAX_ATTEMPTS) {
+        throw new Error(`House NWC connection failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      console.warn(`[House] NWC connect attempt ${attempt} failed, retrying...`);
+      continue;
+    }
+
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('House payment timed out after 60 seconds')), TIMEOUT_MS);
+    });
+
+    try {
+      const result = await Promise.race([
+        provider.sendPayment(invoice),
+        timeoutPromise,
+      ]) as { preimage: string };
+
+      return result;
+    } catch (err) {
+      // On failure, reset the cached provider so next attempt reconnects fresh
+      cachedProvider?.close?.();
+      cachedProvider = null;
+
+      if (attempt === MAX_ATTEMPTS) throw err;
+      console.warn(`[House] Payment attempt ${attempt} failed, retrying...`, err);
+    }
   }
 
-  // Race against a 30-second timeout
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    setTimeout(() => reject(new Error('House payment timed out after 30 seconds')), 30000);
-  });
-
-  try {
-    const result = await Promise.race([
-      provider.sendPayment(invoice),
-      timeoutPromise,
-    ]) as { preimage: string };
-
-    return result;
-  } finally {
-    provider.close?.();
-  }
+  throw new Error('House payment failed after all attempts');
 }
 
 /** Time limit: if no one joins within this period, entry fees are refunded */
