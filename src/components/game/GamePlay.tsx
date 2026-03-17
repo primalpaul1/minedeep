@@ -386,12 +386,19 @@ export function GamePlay({ lobby, characterId }: GamePlayProps) {
       }
     };
 
+    const fireDirection = (dir: 'up' | 'down' | 'left' | 'right' | 'swing') => {
+      if (dir === 'swing') handleSwing();
+      else handleMove(dir);
+    };
+
     const handleKeyDown = (e: KeyboardEvent) => {
       const dir = keyToDirection(e.key);
-      if (dir) {
-        e.preventDefault();
-        pressedKeysRef.current.add(dir);
-      }
+      if (!dir) return;
+      e.preventDefault();
+      const isNew = !pressedKeysRef.current.has(dir);
+      pressedKeysRef.current.add(dir);
+      // Fire immediately on first press for zero-latency response
+      if (isNew) fireDirection(dir);
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
@@ -405,7 +412,7 @@ export function GamePlay({ lobby, characterId }: GamePlayProps) {
       pressedKeysRef.current.clear();
     };
 
-    // Input tick: read pressed keys every 80ms (~12 moves/sec)
+    // Held-key repeat tick: 50ms (~20 moves/sec) for smooth continuous movement
     const tick = setInterval(() => {
       const keys = pressedKeysRef.current;
       if (keys.size === 0) return;
@@ -418,7 +425,7 @@ export function GamePlay({ lobby, characterId }: GamePlayProps) {
 
       // Swing is independent — can fire alongside movement
       if (keys.has('swing')) handleSwing();
-    }, 80);
+    }, 50);
 
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
