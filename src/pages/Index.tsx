@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useSeoMeta } from '@unhead/react';
 import { useNavigate } from 'react-router-dom';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
-import { useGameLobbies, useJoinGame, useUpdateGameStatus } from '@/hooks/useGameLobby';
+import { useGameLobbies, useUpdateGameStatus } from '@/hooks/useGameLobby';
 import { LoginArea } from '@/components/auth/LoginArea';
 import { CreateGameDialog } from '@/components/game/CreateGameDialog';
 import { LobbyCard } from '@/components/game/LobbyCard';
@@ -16,7 +16,6 @@ import type { GameLobbyData } from '@/hooks/useGameLobby';
 const Index = () => {
   const { user } = useCurrentUser();
   const { data: lobbies, isLoading, refetch, isRefetching } = useGameLobbies();
-  const { joinGame } = useJoinGame();
   const { updateStatus } = useUpdateGameStatus();
   const { toast } = useToast();
   const navigate = useNavigate();
@@ -36,26 +35,14 @@ const Index = () => {
     }
   };
 
-  const handleJoin = async (lobby: GameLobbyData) => {
+  const handleJoin = (lobby: GameLobbyData) => {
     if (!user) return;
     setJoiningId(lobby.gameId);
-    try {
-      await joinGame(lobby);
-      toast({
-        title: 'Joined game!',
-        description: 'Pay the entry fee to enter the waiting room.',
-      });
-      // Navigate to game page — payment gate will show first
-      navigate(`/game/${lobby.hostPubkey}/${lobby.gameId}`);
-    } catch (error) {
-      toast({
-        title: 'Failed to join',
-        description: (error as Error).message,
-        variant: 'destructive',
-      });
-    } finally {
-      setJoiningId(null);
-    }
+    // Navigate to game page — payment gate will show first.
+    // The player is registered by paying (zap receipt = proof of entry).
+    // No need to publish a separate "join" event.
+    navigate(`/game/${lobby.hostPubkey}/${lobby.gameId}`);
+    setJoiningId(null);
   };
 
   const handleStart = async (lobby: GameLobbyData) => {

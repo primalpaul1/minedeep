@@ -13,6 +13,7 @@ import {
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { usePublishAction, useClaimWin, useUpdateGameStatus } from '@/hooks/useGameLobby';
 import { useHousePayout } from '@/hooks/useHousePayout';
+import { useGamePlayers } from '@/hooks/useGamePlayers';
 import type { GameLobbyData } from '@/hooks/useGameLobby';
 import { useNostr } from '@nostrify/react';
 import { GAME_KINDS } from '@/lib/gameConstants';
@@ -31,18 +32,35 @@ export function GamePlay({ lobby }: GamePlayProps) {
   const { claimWin } = useClaimWin();
   const { updateStatus } = useUpdateGameStatus();
   const { payWinner, isPaying: isPayingOut, payoutComplete } = useHousePayout();
+  const { players: allPlayers } = useGamePlayers(lobby);
   const { nostr } = useNostr();
   const navigate = useNavigate();
 
   const [gameState, setGameState] = useState<GameState>(() => {
     const state = createGameState(lobby.gameId, lobby.seed);
     let s = state;
+    // Use lobby.players for initial state (from the lobby event p-tags)
     lobby.players.forEach((pubkey, index) => {
       s = addPlayer(s, pubkey, index);
     });
     s = { ...s, started: true };
     return s;
   });
+
+  // When allPlayers updates (from zap receipts), add any missing players to the game
+  useEffect(() => {
+    setGameState(prev => {
+      let state = prev;
+      let changed = false;
+      allPlayers.forEach((pubkey, index) => {
+        if (!state.players.has(pubkey)) {
+          state = addPlayer(state, pubkey, index);
+          changed = true;
+        }
+      });
+      return changed ? state : prev;
+    });
+  }, [allPlayers]);
 
   const gameStateRef = useRef(gameState);
   gameStateRef.current = gameState;
@@ -228,7 +246,7 @@ export function GamePlay({ lobby }: GamePlayProps) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleMove, handleSwing]);
 
-  const totalPot = lobby.betAmount * lobby.players.length;
+  const totalPot = lobby.betAmount * allPlayers.length;
   const isWinner = gameState.winner === user?.pubkey;
   const isLoser = gameState.winner !== null && gameState.winner !== user?.pubkey;
 
@@ -337,7 +355,7 @@ export function GamePlay({ lobby }: GamePlayProps) {
       {/* Sidebar */}
       <div className="w-full lg:w-56 space-y-4">
         <PlayerList
-          players={lobby.players}
+          players={allPlayers}
           hostPubkey={lobby.hostPubkey}
           currentPubkey={user?.pubkey}
           winner={gameState.winner}

@@ -26,7 +26,6 @@ import QRCode from 'qrcode';
 import type { GameLobbyData } from '@/hooks/useGameLobby';
 import type { WebLNProvider } from '@webbtc/webln-types';
 import { useNostr } from '@nostrify/react';
-import type { NostrEvent } from '@nostrify/nostrify';
 
 interface PaymentGateProps {
   lobby: GameLobbyData;
@@ -492,66 +491,6 @@ export function PaymentGate({ lobby, onPaymentComplete, onBack }: PaymentGatePro
   );
 }
 
-/** Hook to check which players have paid for a given lobby */
-export function usePaidPlayers(lobby: GameLobbyData): {
-  paidPlayers: Set<string>;
-  isLoading: boolean;
-  totalPaid: number;
-} {
-  const { nostr } = useNostr();
-  const [paidPlayers, setPaidPlayers] = useState<Set<string>>(new Set());
-  const [isLoading, setIsLoading] = useState(true);
-  const [totalPaid, setTotalPaid] = useState(0);
-
-  const checkPayments = useCallback(async () => {
-    try {
-      const zapReceipts: NostrEvent[] = await nostr.query(
-        [{
-          kinds: [9735],
-          '#a': [`${lobby.event.kind}:${lobby.event.pubkey}:${lobby.gameId}`],
-          limit: 50,
-        }],
-        { signal: AbortSignal.timeout(5000) },
-      );
-
-      const paid = new Set<string>();
-      let total = 0;
-
-      for (const receipt of zapReceipts) {
-        const descriptionTag = receipt.tags.find(([name]) => name === 'description')?.[1];
-        if (!descriptionTag) continue;
-
-        try {
-          const zapRequest = JSON.parse(descriptionTag);
-          const senderPubkey = zapRequest.pubkey as string;
-          const amountTag = zapRequest.tags?.find(([name]: string[]) => name === 'amount')?.[1];
-
-          if (amountTag) {
-            const paidMillisats = parseInt(amountTag);
-            if (paidMillisats >= lobby.betAmount * 1000) {
-              paid.add(senderPubkey);
-              total += Math.floor(paidMillisats / 1000);
-            }
-          }
-        } catch {
-          // Skip
-        }
-      }
-
-      setPaidPlayers(paid);
-      setTotalPaid(total);
-    } catch {
-      // Silently fail
-    } finally {
-      setIsLoading(false);
-    }
-  }, [nostr, lobby]);
-
-  useEffect(() => {
-    checkPayments();
-    const interval = setInterval(checkPayments, 4000);
-    return () => clearInterval(interval);
-  }, [checkPayments]);
-
-  return { paidPlayers, isLoading, totalPaid };
-}
+// Note: The old usePaidPlayers hook has been replaced by useGamePlayers 
+// in @/hooks/useGamePlayers.ts which is the single source of truth for
+// player lists and payment status.

@@ -1,9 +1,9 @@
 import { useEffect, useState, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { PlayerList } from './PlayerList';
-import { usePaidPlayers } from './PaymentGate';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
-import { useUpdateGameStatus, useGameActions } from '@/hooks/useGameLobby';
+import { useUpdateGameStatus } from '@/hooks/useGameLobby';
+import { useGamePlayers } from '@/hooks/useGamePlayers';
 import { useHousePayout } from '@/hooks/useHousePayout';
 import type { GameLobbyData } from '@/hooks/useGameLobby';
 import { REFUND_TIMEOUT_MS } from '@/lib/houseAccount';
@@ -19,19 +19,18 @@ interface WaitingRoomProps {
 export function WaitingRoom({ lobby, onGameStart }: WaitingRoomProps) {
   const { user } = useCurrentUser();
   const { updateStatus } = useUpdateGameStatus();
-  const { data: actions } = useGameActions(lobby.gameId);
   const { toast } = useToast();
   const navigate = useNavigate();
-  const { paidPlayers, totalPaid } = usePaidPlayers(lobby);
+
+  // Single source of truth for players and payments
+  const { players, paidPlayers, allPaid, paidCount, totalPaid } = useGamePlayers(lobby);
 
   const { refundPlayers, isPaying: isRefunding } = useHousePayout();
 
   const isHost = user?.pubkey === lobby.hostPubkey;
-  const allPaid = lobby.players.length > 0 && lobby.players.every(p => paidPlayers.has(p));
-  const paidCount = lobby.players.filter(p => paidPlayers.has(p)).length;
 
   // Calculate time remaining until refund
-  const gameCreatedAt = lobby.event.created_at * 1000; // convert to ms
+  const gameCreatedAt = lobby.event.created_at * 1000;
   const refundDeadline = gameCreatedAt + REFUND_TIMEOUT_MS;
   const [now, setNow] = useState(Date.now());
   const [isExpired, setIsExpired] = useState(false);
@@ -56,47 +55,21 @@ export function WaitingRoom({ lobby, onGameStart }: WaitingRoomProps) {
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
   }, [refundDeadline, now]);
 
-  // Auto-trigger refund when expired (host only, only players with 1 player)
+  // Auto-trigger refund when expired (host only, only 1 player who paid)
   useEffect(() => {
-    if (isExpired && isHost && lobby.players.length <= 1 && paidCount > 0 && !refundTriggered) {
+    if (isExpired && isHost && players.length <= 1 && paidCount > 0 && !refundTriggered) {
       setRefundTriggered(true);
-      const paidList = lobby.players.filter(p => paidPlayers.has(p));
+      const paidList = players.filter(p => paidPlayers.has(p));
       refundPlayers(lobby, paidList).catch(console.error);
     }
-  }, [isExpired, isHost, lobby, paidCount, paidPlayers, refundTriggered, refundPlayers]);
+  }, [isExpired, isHost, players, paidCount, paidPlayers, refundTriggered, refundPlayers, lobby]);
 
   const handleManualRefund = async () => {
     if (!isExpired) return;
     setRefundTriggered(true);
-    const paidList = lobby.players.filter(p => paidPlayers.has(p));
+    const paidList = players.filter(p => paidPlayers.has(p));
     await refundPlayers(lobby, paidList);
   };
-
-  // Check for new players from join actions
-  useEffect(() => {
-    if (!actions) return;
-
-    const joiners = new Set<string>();
-    actions.forEach(event => {
-      try {
-        const action = JSON.parse(event.content);
-        if (action.type === 'join' && !lobby.players.includes(event.pubkey)) {
-          joiners.add(event.pubkey);
-        }
-      } catch {
-        // Skip invalid
-      }
-    });
-
-    // If host, update lobby with new players
-    if (isHost && joiners.size > 0) {
-      const updatedPlayers = [...lobby.players, ...Array.from(joiners)];
-      updateStatus({
-        ...lobby,
-        players: updatedPlayers,
-      }, 'waiting').catch(console.error);
-    }
-  }, [actions, isHost, lobby, updateStatus]);
 
   const handleStartGame = async () => {
     if (!allPaid) {
@@ -109,7 +82,12 @@ export function WaitingRoom({ lobby, onGameStart }: WaitingRoomProps) {
     }
 
     try {
-      await updateStatus(lobby, 'playing');
+      // Update lobby with the full player list before starting
+      const lobbyWithAllPlayers: GameLobbyData = {
+        ...lobby,
+        players,
+      };
+      await updateStatus(lobbyWithAllPlayers, 'playing');
       onGameStart();
     } catch (error) {
       toast({
@@ -170,16 +148,16 @@ export function WaitingRoom({ lobby, onGameStart }: WaitingRoomProps) {
 
       {/* Payment status banner */}
       <div className={`border rounded-xl p-3 flex items-center gap-3 ${
-        allPaid
+        allPaid && players.length >= 2
           ? 'bg-emerald-500/10 border-emerald-500/30'
           : 'bg-amber-500/10 border-amber-500/30'
       }`}>
-        {allPaid ? (
+        {allPaid && players.length >= 2 ? (
           <>
             <ShieldCheck className="w-5 h-5 text-emerald-400 flex-shrink-0" />
             <div>
               <p className="text-xs font-mono text-emerald-400 font-bold">
-                All players have paid!
+                All {players.length} players have paid!
               </p>
               <p className="text-[10px] font-mono text-emerald-400/70">
                 {isHost ? 'You can now start the game.' : 'Waiting for host to start the game.'}
@@ -191,10 +169,12 @@ export function WaitingRoom({ lobby, onGameStart }: WaitingRoomProps) {
             <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0" />
             <div>
               <p className="text-xs font-mono text-amber-400 font-bold">
-                {paidCount}/{lobby.players.length} miners have paid
+                {paidCount}/{players.length} miners have paid
               </p>
               <p className="text-[10px] font-mono text-amber-400/70">
-                Waiting for all players to pay their entry fee...
+                {players.length < 2
+                  ? 'Share the invite link — need at least 2 players!'
+                  : 'Waiting for all players to pay their entry fee...'}
               </p>
             </div>
           </>
@@ -204,7 +184,7 @@ export function WaitingRoom({ lobby, onGameStart }: WaitingRoomProps) {
       {/* Players */}
       <div className="bg-stone-900/50 border border-stone-700/30 rounded-xl p-4">
         <PlayerList
-          players={lobby.players}
+          players={players}
           hostPubkey={lobby.hostPubkey}
           currentPubkey={user?.pubkey}
           winner={null}
@@ -214,14 +194,14 @@ export function WaitingRoom({ lobby, onGameStart }: WaitingRoomProps) {
         <div className="mt-4 flex items-center justify-center gap-2 text-stone-500">
           <Users className="w-4 h-4" />
           <span className="text-xs font-mono">
-            {lobby.players.length}/{lobby.maxPlayers} miners
+            {players.length}/{lobby.maxPlayers} miners
           </span>
         </div>
       </div>
 
       {/* Timer & waiting animation */}
       <div className="space-y-2">
-        {isExpired && lobby.players.length <= 1 ? (
+        {isExpired && players.length <= 1 ? (
           <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 text-center space-y-3">
             <div className="flex items-center justify-center gap-2 text-red-400">
               <Clock className="w-4 h-4" />
@@ -249,7 +229,7 @@ export function WaitingRoom({ lobby, onGameStart }: WaitingRoomProps) {
             <div className="flex items-center gap-2">
               <Loader2 className="w-5 h-5 text-amber-400/60 animate-spin" />
               <span className="text-sm text-stone-400 font-mono animate-pulse">
-                {allPaid ? 'Ready to start!' : 'Waiting for players to join & pay...'}
+                {allPaid && players.length >= 2 ? 'Ready to start!' : 'Waiting for players to join & pay...'}
               </span>
             </div>
             <div className="flex items-center gap-1.5 text-stone-600">
@@ -274,15 +254,19 @@ export function WaitingRoom({ lobby, onGameStart }: WaitingRoomProps) {
       {isHost && (
         <Button
           onClick={handleStartGame}
-          disabled={!allPaid || lobby.players.length < 1}
+          disabled={!allPaid || players.length < 2}
           className={`w-full font-mono font-bold text-base py-5 transition-all ${
-            allPaid
+            allPaid && players.length >= 2
               ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
               : 'bg-stone-700 text-stone-400 cursor-not-allowed'
           }`}
         >
           <Play className="w-5 h-5 mr-2" />
-          {allPaid ? 'Start Mining!' : `Waiting for ${lobby.players.length - paidCount} payment(s)...`}
+          {players.length < 2
+            ? 'Need at least 2 players'
+            : allPaid
+              ? 'Start Mining!'
+              : `Waiting for ${players.length - paidCount} payment(s)...`}
         </Button>
       )}
 
