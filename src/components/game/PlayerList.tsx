@@ -2,7 +2,7 @@ import { useAuthor } from '@/hooks/useAuthor';
 import { genUserName } from '@/lib/genUserName';
 import { getPlayerColor } from '@/lib/gameEngine';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { Crown, Pickaxe } from 'lucide-react';
+import { Crown, Pickaxe, CheckCircle2, Clock } from 'lucide-react';
 
 interface PlayerCardProps {
   pubkey: string;
@@ -10,9 +10,11 @@ interface PlayerCardProps {
   isHost: boolean;
   isWinner: boolean;
   isCurrent: boolean;
+  hasPaid?: boolean;
+  showPaymentStatus?: boolean;
 }
 
-function PlayerCard({ pubkey, index, isHost, isWinner, isCurrent }: PlayerCardProps) {
+function PlayerCard({ pubkey, index, isHost, isWinner, isCurrent, hasPaid, showPaymentStatus }: PlayerCardProps) {
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
   const displayName = metadata?.name ?? genUserName(pubkey);
@@ -47,7 +49,14 @@ function PlayerCard({ pubkey, index, isHost, isWinner, isCurrent }: PlayerCardPr
       {isWinner && (
         <span className="text-amber-400 text-xs">₿ WINNER</span>
       )}
-      {isCurrent && !isWinner && (
+      {showPaymentStatus && !isWinner && (
+        hasPaid ? (
+          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
+        ) : (
+          <Clock className="w-3.5 h-3.5 text-stone-500 flex-shrink-0 animate-pulse" />
+        )
+      )}
+      {isCurrent && !isWinner && !showPaymentStatus && (
         <Pickaxe className="w-3 h-3 text-stone-400 flex-shrink-0" />
       )}
     </div>
@@ -59,13 +68,21 @@ interface PlayerListProps {
   hostPubkey: string;
   currentPubkey?: string;
   winner: string | null;
+  paidPlayers?: Set<string>;
 }
 
-export function PlayerList({ players, hostPubkey, currentPubkey, winner }: PlayerListProps) {
+export function PlayerList({ players, hostPubkey, currentPubkey, winner, paidPlayers }: PlayerListProps) {
+  const showPaymentStatus = !!paidPlayers && !winner;
+
   return (
     <div className="space-y-1.5">
       <h3 className="text-xs font-mono text-stone-500 uppercase tracking-wider px-1">
         Miners ({players.length})
+        {showPaymentStatus && (
+          <span className="text-emerald-400/60 ml-2">
+            {players.filter(p => paidPlayers.has(p)).length} paid
+          </span>
+        )}
       </h3>
       {players.map((pubkey, index) => (
         <PlayerCard
@@ -75,6 +92,8 @@ export function PlayerList({ players, hostPubkey, currentPubkey, winner }: Playe
           isHost={pubkey === hostPubkey}
           isWinner={pubkey === winner}
           isCurrent={pubkey === currentPubkey}
+          hasPaid={paidPlayers?.has(pubkey)}
+          showPaymentStatus={showPaymentStatus}
         />
       ))}
     </div>

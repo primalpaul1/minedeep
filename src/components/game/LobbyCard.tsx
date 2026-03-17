@@ -18,7 +18,6 @@ export function LobbyCard({ lobby, currentPubkey, onJoin, onStart, isJoining }: 
   const hostName = hostAuthor.data?.metadata?.name ?? genUserName(lobby.hostPubkey);
   const isHost = currentPubkey === lobby.hostPubkey;
   const isInGame = currentPubkey ? lobby.players.includes(currentPubkey) : false;
-  const totalPot = lobby.betAmount * lobby.players.length;
   const isFull = lobby.players.length >= lobby.maxPlayers;
 
   return (
@@ -45,13 +44,13 @@ export function LobbyCard({ lobby, currentPubkey, onJoin, onStart, isJoining }: 
             </div>
           </div>
 
-          {/* Pot display */}
+          {/* Entry fee */}
           <div className="text-right">
             <div className="flex items-center gap-1 text-amber-400">
               <Zap className="w-4 h-4 fill-current" />
-              <span className="text-lg font-mono font-bold">{totalPot}</span>
+              <span className="text-lg font-mono font-bold">{lobby.betAmount}</span>
             </div>
-            <p className="text-xs text-stone-500 font-mono">sats in pot</p>
+            <p className="text-xs text-stone-500 font-mono">sats entry</p>
           </div>
         </div>
 
@@ -64,7 +63,7 @@ export function LobbyCard({ lobby, currentPubkey, onJoin, onStart, isJoining }: 
             </span>
           </div>
           <div className="text-xs font-mono text-stone-500">
-            Entry: <span className="text-amber-400/80">{lobby.betAmount} sats</span>
+            Pay <span className="text-amber-400/80">{lobby.betAmount} sats</span> to join
           </div>
           {isFull && (
             <span className="text-xs font-mono text-red-400/80 bg-red-400/10 px-2 py-0.5 rounded">
@@ -119,7 +118,7 @@ export function LobbyCard({ lobby, currentPubkey, onJoin, onStart, isJoining }: 
               ) : (
                 <>
                   <Zap className="w-4 h-4 mr-2 fill-current" />
-                  Join — {lobby.betAmount} sats
+                  Join Game — {lobby.betAmount} sats
                 </>
               )}
             </Button>

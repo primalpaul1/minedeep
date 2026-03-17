@@ -9,7 +9,7 @@ Represents a SatMiner game room. Created by the host when they create a new game
 | Tag | Required | Description |
 |-----|----------|-------------|
 | `d` | Yes | Unique game identifier |
-| `bet` | Yes | Bet amount in satoshis |
+| `bet` | Yes | Entry fee amount in satoshis |
 | `seed` | Yes | Deterministic seed for generating the game grid and bitcoin position |
 | `status` | Yes | Game status: `waiting`, `playing`, or `finished` |
 | `max_players` | No | Maximum number of players (default: 8) |
@@ -35,6 +35,12 @@ Represents a SatMiner game room. Created by the host when they create a new game
   ]
 }
 ```
+
+### Payment Verification
+
+Entry fees are paid via NIP-57 zaps to the game host's lobby event (kind 35303). Payment verification is done by querying for kind 9735 zap receipts targeting the lobby event's `a` tag coordinate (`35303:<host-pubkey>:<game-id>`). Each player's payment is verified by checking the zap request's `pubkey` field in the receipt's `description` tag against the player list, and confirming the `amount` tag meets the minimum entry fee.
+
+The game host must have a Lightning address (`lud16` or `lud06`) configured in their kind 0 profile metadata to receive entry fee payments.
 
 ## Kind 1159 — Game Action (Regular)
 

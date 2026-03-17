@@ -31,6 +31,7 @@ const Index = () => {
 
   const handleGameCreated = (gameId: string, _seed: string) => {
     if (user) {
+      // Navigate to game page — payment gate will show first
       navigate(`/game/${user.pubkey}/${gameId}`);
     }
   };
@@ -42,8 +43,9 @@ const Index = () => {
       await joinGame(lobby);
       toast({
         title: 'Joined game!',
-        description: `You're in! Waiting for host to start...`,
+        description: 'Pay the entry fee to enter the waiting room.',
       });
+      // Navigate to game page — payment gate will show first
       navigate(`/game/${lobby.hostPubkey}/${lobby.gameId}`);
     } catch (error) {
       toast({

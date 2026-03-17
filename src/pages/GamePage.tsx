@@ -5,6 +5,7 @@ import { useGameLobby } from '@/hooks/useGameLobby';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { WaitingRoom } from '@/components/game/WaitingRoom';
 import { GamePlay } from '@/components/game/GamePlay';
+import { PaymentGate } from '@/components/game/PaymentGate';
 import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { LoginArea } from '@/components/auth/LoginArea';
@@ -14,6 +15,7 @@ export default function GamePage() {
   const { user } = useCurrentUser();
   const navigate = useNavigate();
   const [gameStarted, setGameStarted] = useState(false);
+  const [hasPaid, setHasPaid] = useState(false);
 
   useSeoMeta({
     title: 'SatMiner — Game Room',
@@ -24,6 +26,10 @@ export default function GamePage() {
 
   const handleGameStart = useCallback(() => {
     setGameStarted(true);
+  }, []);
+
+  const handlePaymentComplete = useCallback(() => {
+    setHasPaid(true);
   }, []);
 
   if (!hostPubkey || !gameId) {
@@ -80,13 +86,32 @@ export default function GamePage() {
 
   const isPlaying = gameStarted || lobby.status === 'playing';
 
+  // If the game is already playing, go straight to gameplay
+  if (isPlaying) {
+    return (
+      <div className="min-h-screen bg-stone-950 px-4 py-6">
+        <GamePlay lobby={lobby} />
+      </div>
+    );
+  }
+
+  // Payment gate: player must pay before entering the waiting room
+  if (!hasPaid) {
+    return (
+      <div className="min-h-screen bg-stone-950 px-4 py-8">
+        <PaymentGate
+          lobby={lobby}
+          onPaymentComplete={handlePaymentComplete}
+          onBack={() => navigate('/')}
+        />
+      </div>
+    );
+  }
+
+  // Paid: show waiting room
   return (
     <div className="min-h-screen bg-stone-950 px-4 py-6">
-      {isPlaying ? (
-        <GamePlay lobby={lobby} />
-      ) : (
-        <WaitingRoom lobby={lobby} onGameStart={handleGameStart} />
-      )}
+      <WaitingRoom lobby={lobby} onGameStart={handleGameStart} />
     </div>
   );
 }
