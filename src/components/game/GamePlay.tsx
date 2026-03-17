@@ -109,7 +109,10 @@ export function GamePlay({ lobby }: GamePlayProps) {
 
               if (action.type === 'move' && action.direction) {
                 state = movePlayer(state, event.pubkey, action.direction);
-                state = applyGravity(state, event.pubkey);
+                // Only apply gravity for horizontal moves, not intentional up/down moves
+                if (action.direction === 'left' || action.direction === 'right') {
+                  state = applyGravity(state, event.pubkey);
+                }
               } else if (action.type === 'swing') {
                 const result = swingAxe(state, event.pubkey);
                 state = result.state;
@@ -180,7 +183,11 @@ export function GamePlay({ lobby }: GamePlayProps) {
 
     setGameState(prev => {
       let state = movePlayer(prev, user.pubkey, direction);
-      state = applyGravity(state, user.pubkey);
+      // Only apply gravity for horizontal movement (walking off a ledge),
+      // not for intentional up/down moves.
+      if (direction === 'left' || direction === 'right') {
+        state = applyGravity(state, user.pubkey);
+      }
       return state;
     });
 
