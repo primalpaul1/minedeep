@@ -20,7 +20,6 @@ import { CHARACTERS } from '@/lib/gameConstants';
 // by the time the user enters a game.
 CHARACTERS.forEach(char => {
   const img = new Image();
-  img.crossOrigin = 'anonymous';
   img.src = char.image;
 });
 

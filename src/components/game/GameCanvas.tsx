@@ -190,7 +190,7 @@ function preloadCharacterImages() {
   preloadStarted = true;
   for (const char of CHARACTERS) {
     const img = new Image();
-    img.crossOrigin = 'anonymous';
+    // No crossOrigin needed — images are served locally
     img.src = char.image;
     // Retry once on failure
     img.onerror = () => {
