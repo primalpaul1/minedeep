@@ -412,7 +412,7 @@ export function GamePlay({ lobby, characterId }: GamePlayProps) {
       pressedKeysRef.current.clear();
     };
 
-    // Held-key repeat tick: 50ms (~20 moves/sec) for smooth continuous movement
+    // Held-key repeat tick: 100ms (~10 moves/sec) for smooth, deliberate movement
     const tick = setInterval(() => {
       const keys = pressedKeysRef.current;
       if (keys.size === 0) return;
@@ -425,7 +425,7 @@ export function GamePlay({ lobby, characterId }: GamePlayProps) {
 
       // Swing is independent — can fire alongside movement
       if (keys.has('swing')) handleSwing();
-    }, 50);
+    }, 100);
 
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
