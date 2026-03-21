@@ -4,10 +4,8 @@ import react from "@vitejs/plugin-react-swc";
 import { defineConfig } from "vitest/config";
 
 // https://vitejs.dev/config/
-const isGitHubPages = process.env.GITHUB_ACTIONS === 'true';
-
 export default defineConfig(() => ({
-  base: isGitHubPages ? '/satminer/' : '/',
+  base: '/',
   server: {
     host: "::",
     port: 8080,
