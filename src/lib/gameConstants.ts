@@ -8,11 +8,14 @@ export interface CharacterDef {
 const base = import.meta.env.BASE_URL;
 
 export const CHARACTERS: CharacterDef[] = [
-  { id: 'saylor', label: 'Michael Saylor', image: `${base}saylor.png` },
-  { id: 'dorsey', label: 'Jack Dorsey', image: `${base}dorsey.png` },
-  { id: 'mow', label: 'Samson Mow', image: `${base}mow.png` },
-  { id: 'saifedean', label: 'Saifedean Ammous', image: `${base}saifedean.png` },
+  { id: 'saylor', label: 'Saylor', image: `${base}saylor.png` },
+  { id: 'dorsey', label: 'Dorsey', image: `${base}dorsey.png` },
+  { id: 'jimmy', label: 'Jimmy', image: `${base}jimmy.png` },
+  { id: 'lyn', label: 'Lyn', image: `${base}lyn.png` },
+  { id: 'mallers', label: 'Mallers', image: `${base}mallers.png` },
   { id: 'odell', label: 'Odell', image: `${base}odell.png` },
+  { id: 'saifedean', label: 'Saifedean', image: `${base}saifedean.png` },
+  { id: 'samson', label: 'Samson', image: `${base}samson.png` },
 ];
 
 /** Nostr event kinds for the SatMiner game */

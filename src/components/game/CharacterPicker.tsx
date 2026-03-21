@@ -13,7 +13,7 @@ export function CharacterPicker({ selected, onSelect, className }: CharacterPick
       <h3 className="text-xs font-mono text-stone-500 uppercase tracking-wider text-center">
         Choose Your Miner
       </h3>
-      <div className="grid grid-cols-5 gap-2">
+      <div className="grid grid-cols-4 gap-2">
         {CHARACTERS.map((char: CharacterDef) => (
           <button
             key={char.id}
