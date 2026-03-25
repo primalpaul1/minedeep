@@ -39,8 +39,9 @@ jobs:
 
       - name: Install dependencies and build
         env:
-          VITE_HOUSE_NSEC: ${{ secrets.VITE_HOUSE_NSEC }}
-          VITE_HOUSE_NWC: ${{ secrets.VITE_HOUSE_NWC }}
+          # Public values only — no secrets in the browser bundle!
+          VITE_HOUSE_PUBKEY: ${{ vars.VITE_HOUSE_PUBKEY }}
+          VITE_PAYOUT_API_URL: ${{ vars.VITE_PAYOUT_API_URL }}
         run: |
           npm install
           npm run build
